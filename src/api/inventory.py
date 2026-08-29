@@ -12,8 +12,12 @@ router = APIRouter(
 
 
 class InventoryAudit(BaseModel):
-    number_of_potions: int
-    ml_in_barrels: int
+    red_potions: int
+    green_potions: int
+    blue_potions: int
+    red_ml: int
+    green_ml: int
+    blue_ml: int
     gold: int
 
 
@@ -36,15 +40,15 @@ def get_inventory():
         row = connection.execute(
             sqlalchemy.text(
                 """
-                SELECT gold
+                SELECT
+                    red_potions, green_potions, blue_potions, red_ml, green_ml, blue_ml, gold
                 FROM global_inventory
                 """
             )
         ).one()
 
-        gold = row.gold
-
-    return InventoryAudit(number_of_potions=0, ml_in_barrels=0, gold=gold)
+    
+    return InventoryAudit(number_of_potions=0, ml_in_barrels=0, gold=row.gold, red_potions=row.red_potions, green_potions=row.green_potions, blue_potions=row.blue_potions, red_ml=row.red_ml, green_ml=row.green_ml, blue_ml=row.blue_ml,)
 
 
 @router.post("/plan", response_model=CapacityPlan)
