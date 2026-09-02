@@ -87,7 +87,7 @@ def create_bottle_plan(
     current_potion_inventory: List[PotionMixes],
 ) -> List[PotionMixes]:
 
-    TARGET_PER_COLOR = 10
+    TARGET_PER_COLOR = 20
 
     red_to_make = min(red_ml // 100, TARGET_PER_COLOR)
     green_to_make = min(green_ml // 100, TARGET_PER_COLOR)
