@@ -15,11 +15,11 @@ router = APIRouter(
 
 def calculate_price(inventory: int) -> int:
     if inventory <= 3:
-        return 60
-    elif inventory <= 10:
         return 50
+    elif inventory <= 10:
+        return 30
     else:
-        return 45
+        return 25
 
 class SearchSortOptions(str, Enum):
     customer_name = "customer_name"

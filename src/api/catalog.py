@@ -19,13 +19,13 @@ class CatalogItem(BaseModel):
         description="Must contain exactly 4 elements: [r, g, b, d]",
     )
 
-def calculate_price(inventory: int) -> int: #dynamic pricing ???
+def calculate_price(inventory: int) -> int:
     if inventory <= 3:
-        return 60
-    elif inventory <= 10:
         return 50
+    elif inventory <= 10:
+        return 30
     else:
-        return 45
+        return 25
 
 
 # Placeholder function, you will replace this with a database call
