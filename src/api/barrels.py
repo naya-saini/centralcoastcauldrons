@@ -101,7 +101,7 @@ def create_barrel_plan(
     wholesale_catalog: List[Barrel],
 ) -> List[BarrelOrder]:
 
-    GOLD_RESERVE = 20
+    GOLD_RESERVE = 50
     MIN_POTIONS = 10
 
     potion_counts = {
