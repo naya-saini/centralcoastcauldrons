@@ -86,32 +86,38 @@ def create_bottle_plan(
     maximum_potion_capacity: int,
     current_potion_inventory: List[PotionMixes],
 ) -> List[PotionMixes]:
+
+    TARGET_PER_COLOR = 10
+
+    red_to_make = min(red_ml // 100, TARGET_PER_COLOR)
+    green_to_make = min(green_ml // 100, TARGET_PER_COLOR)
+    blue_to_make = min(blue_ml // 100, TARGET_PER_COLOR)
+
     plan = []
 
-    if red_ml >= 100:
+    if red_to_make > 0:
         plan.append(
             PotionMixes(
                 potion_type=[100, 0, 0, 0],
-                quantity=red_ml // 100,
+                quantity=red_to_make,
             )
         )
 
-    if green_ml >= 100:
+    if green_to_make > 0:
         plan.append(
             PotionMixes(
                 potion_type=[0, 100, 0, 0],
-                quantity=green_ml // 100,
+                quantity=green_to_make,
             )
         )
 
-    if blue_ml >= 100:
+    if blue_to_make > 0:
         plan.append(
             PotionMixes(
                 potion_type=[0, 0, 100, 0],
-                quantity=blue_ml // 100,
+                quantity=blue_to_make,
             )
         )
-
 
     return plan
 

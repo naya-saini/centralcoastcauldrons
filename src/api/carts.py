@@ -13,6 +13,14 @@ router = APIRouter(
 )
 
 
+def calculate_price(inventory: int) -> int:
+    if inventory <= 3:
+        return 60
+    elif inventory <= 10:
+        return 50
+    else:
+        return 45
+
 class SearchSortOptions(str, Enum):
     customer_name = "customer_name"
     item_sku = "item_sku"
@@ -152,7 +160,50 @@ def checkout(cart_id: int, cart_checkout: CartCheckout):
         red_potions + green_potions + blue_potions
     )
 
-    total_gold_paid = total_potions_bought * 50
+    with db.engine.begin() as connection:
+
+    inventory = connection.execute(
+        sqlalchemy.text(
+            """
+            SELECT
+                red_potions,
+                green_potions,
+                blue_potions
+            FROM global_inventory
+            """
+        )
+    ).one()
+
+    # Calculate the current prices based on shop inventory
+    red_price = calculate_price(inventory.red_potions)
+    green_price = calculate_price(inventory.green_potions)
+    blue_price = calculate_price(inventory.blue_potions)
+
+    # Calculate what the customer actually pays
+    total_gold_paid = (
+        red_potions * red_price
+        + green_potions * green_price
+        + blue_potions * blue_price
+    )
+
+    connection.execute(
+        sqlalchemy.text(
+            """
+            UPDATE global_inventory
+            SET
+                gold = gold + :total_gold_paid,
+                red_potions = red_potions - :red_potions,
+                green_potions = green_potions - :green_potions,
+                blue_potions = blue_potions - :blue_potions
+            """
+        ),
+        {
+            "total_gold_paid": total_gold_paid,
+            "red_potions": red_potions,
+            "green_potions": green_potions,
+            "blue_potions": blue_potions,
+        },
+    )
 
     with db.engine.begin() as connection:
         connection.execute(

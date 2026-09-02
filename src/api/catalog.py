@@ -19,6 +19,14 @@ class CatalogItem(BaseModel):
         description="Must contain exactly 4 elements: [r, g, b, d]",
     )
 
+def calculate_price(inventory: int) -> int: #dynamic pricing ???
+    if inventory <= 3:
+        return 60
+    elif inventory <= 10:
+        return 50
+    else:
+        return 45
+
 
 # Placeholder function, you will replace this with a database call
 def create_catalog() -> List[CatalogItem]:
@@ -43,7 +51,7 @@ def create_catalog() -> List[CatalogItem]:
                 sku="RED_POTION_0",
                 name="red potion",
                 quantity=row.red_potions,
-                price=50,
+                price=calculate_price(row.red_potions),
                 potion_type=[100, 0, 0, 0],
             )
         )
@@ -54,7 +62,7 @@ def create_catalog() -> List[CatalogItem]:
                 sku="GREEN_POTION_0",
                 name="green potion",
                 quantity=row.green_potions,
-                price=50,
+                price=calculate_price(row.green_potions),
                 potion_type=[0, 100, 0, 0],
             )
         )
@@ -65,7 +73,7 @@ def create_catalog() -> List[CatalogItem]:
                 sku="BLUE_POTION_0",
                 name="blue potion",
                 quantity=row.blue_potions,
-                price=50,
+                price=calculate_price(row.blue_potions),
                 potion_type=[0, 0, 100, 0],
             )
         )

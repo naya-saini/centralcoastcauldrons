@@ -101,7 +101,8 @@ def create_barrel_plan(
     wholesale_catalog: List[Barrel],
 ) -> List[BarrelOrder]:
 
-    color = random.choice(["red", "green", "blue"])
+    GOLD_RESERVE = 50
+    MIN_POTIONS = 10
 
     potion_counts = {
         "red": current_red_potions,
@@ -115,26 +116,36 @@ def create_barrel_plan(
         "blue": 2,
     }
 
-    # Do not buy if we already have 5 or more potions
-    if potion_counts[color] >= 5:
+    # Find the color with the lowest inventory
+    color = min(potion_counts, key=potion_counts.get)
+
+    # Don't buy if inventory is already healthy
+    if potion_counts[color] >= MIN_POTIONS:
         return []
 
-    # Find the cheapest barrel of the randomly selected color
-    barrel = min(
-        (
-            b for b in wholesale_catalog
-            if b.potion_type[color_index[color]] == 1
-        ),
-        key=lambda b: b.price,
-        default=None,
+    # Find barrels for that color
+    possible_barrels = [
+        barrel
+        for barrel in wholesale_catalog
+        if barrel.potion_type[color_index[color]] == 1
+        and barrel.price <= gold - GOLD_RESERVE
+    ]
+
+    if not possible_barrels:
+        return []
+
+    # Find the best value: lowest gold per ml
+    best_barrel = min(
+        possible_barrels,
+        key=lambda barrel: barrel.price / barrel.ml_per_barrel,
     )
 
-    # Only purchase if we can afford it
-    if barrel and barrel.price <= gold:
-        return [BarrelOrder(sku=barrel.sku, quantity=1)]
-
-    # return an empty list if no affordable red barrel is found
-    return []
+    return [
+        BarrelOrder(
+            sku=best_barrel.sku,
+            quantity=1,
+        )
+    ]
 
 
 @router.post("/plan", response_model=List[BarrelOrder])
