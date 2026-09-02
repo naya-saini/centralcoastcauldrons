@@ -116,36 +116,42 @@ def create_barrel_plan(
         "blue": 2,
     }
 
-    # Find the color with the lowest inventory
-    color = min(potion_counts, key=potion_counts.get)
+    orders = []
+    available_gold = gold - GOLD_RESERVE
 
-    # Don't buy if inventory is already healthy
-    if potion_counts[color] >= MIN_POTIONS:
-        return []
+    # Go through every color
+    for color, count in potion_counts.items():
 
-    # Find barrels for that color
-    possible_barrels = [
-        barrel
-        for barrel in wholesale_catalog
-        if barrel.potion_type[color_index[color]] == 1
-        and barrel.price <= gold - GOLD_RESERVE
-    ]
+        # Only buy more if inventory is low
+        if count >= MIN_POTIONS:
+            continue
 
-    if not possible_barrels:
-        return []
+        possible_barrels = [
+            barrel
+            for barrel in wholesale_catalog
+            if barrel.potion_type[color_index[color]] == 1
+            and barrel.price <= available_gold
+        ]
 
-    # Find the best value: lowest gold per ml
-    best_barrel = min(
-        possible_barrels,
-        key=lambda barrel: barrel.price / barrel.ml_per_barrel,
-    )
+        if not possible_barrels:
+            continue
 
-    return [
-        BarrelOrder(
-            sku=best_barrel.sku,
-            quantity=1,
+        # Buy the best value barrel
+        best_barrel = min(
+            possible_barrels,
+            key=lambda barrel: barrel.price / barrel.ml_per_barrel,
         )
-    ]
+
+        orders.append(
+            BarrelOrder(
+                sku=best_barrel.sku,
+                quantity=1,
+            )
+        )
+
+        available_gold -= best_barrel.price
+
+    return orders
 
 
 @router.post("/plan", response_model=List[BarrelOrder])
