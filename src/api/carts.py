@@ -148,6 +148,7 @@ def checkout(cart_id: int, cart_checkout: CartCheckout):
     green_potions = 0
     blue_potions = 0
 
+    # Count the potions in the cart
     for item_sku, quantity in carts[cart_id].items():
         if item_sku == "RED_POTION_0":
             red_potions += quantity
@@ -160,52 +161,33 @@ def checkout(cart_id: int, cart_checkout: CartCheckout):
         red_potions + green_potions + blue_potions
     )
 
+    # Everything database-related stays inside this block
     with db.engine.begin() as connection:
 
-    inventory = connection.execute(
-        sqlalchemy.text(
-            """
-            SELECT
-                red_potions,
-                green_potions,
-                blue_potions
-            FROM global_inventory
-            """
+        inventory = connection.execute(
+            sqlalchemy.text(
+                """
+                SELECT
+                    red_potions,
+                    green_potions,
+                    blue_potions
+                FROM global_inventory
+                """
+            )
+        ).one()
+
+        # Calculate prices based on current inventory
+        red_price = calculate_price(inventory.red_potions)
+        green_price = calculate_price(inventory.green_potions)
+        blue_price = calculate_price(inventory.blue_potions)
+
+        total_gold_paid = (
+            red_potions * red_price
+            + green_potions * green_price
+            + blue_potions * blue_price
         )
-    ).one()
 
-    # Calculate the current prices based on shop inventory
-    red_price = calculate_price(inventory.red_potions)
-    green_price = calculate_price(inventory.green_potions)
-    blue_price = calculate_price(inventory.blue_potions)
-
-    # Calculate what the customer actually pays
-    total_gold_paid = (
-        red_potions * red_price
-        + green_potions * green_price
-        + blue_potions * blue_price
-    )
-
-    connection.execute(
-        sqlalchemy.text(
-            """
-            UPDATE global_inventory
-            SET
-                gold = gold + :total_gold_paid,
-                red_potions = red_potions - :red_potions,
-                green_potions = green_potions - :green_potions,
-                blue_potions = blue_potions - :blue_potions
-            """
-        ),
-        {
-            "total_gold_paid": total_gold_paid,
-            "red_potions": red_potions,
-            "green_potions": green_potions,
-            "blue_potions": blue_potions,
-        },
-    )
-
-    with db.engine.begin() as connection:
+        # Update the database BEFORE the connection closes
         connection.execute(
             sqlalchemy.text(
                 """
