@@ -22,38 +22,42 @@ class CatalogItem(BaseModel):
 
 # Placeholder function, you will replace this with a database call
 def create_catalog() -> List[CatalogItem]:
-
     with db.engine.begin() as connection:
         rows = connection.execute(
             sqlalchemy.text(
-            """
-            SELECT 
-            sku,
-            name,
-            red,
-            green,
-            blue,
-            quantity,
-            price
-            FROM potions
-            WHERE quantity > 0
-            LIMIT 6
-            """
+                """
+                SELECT
+                    sku,
+                    name,
+                    quantity,
+                    price,
+                    red,
+                    green,
+                    blue
+                FROM potions
+                WHERE quantity > 0
+                LIMIT 6
+                """
             )
-        ).mappings().all() 
+        ).mappings().all()
 
     catalog = []
 
-    for row in rows: 
-        catalog.append( 
-            CatalogItem( 
-                sku=row["sku"], 
-                name=row["name"], 
-                quantity=row["quantity"], 
-                price=row["price"], 
-                potion_type=[ row["red"], row["green"], row["blue"], 0, ], 
-            ) 
-        ) 
+    for potion in rows:
+        catalog.append(
+            CatalogItem(
+                sku=potion["sku"],
+                name=potion["name"],
+                quantity=potion["quantity"],
+                price=potion["price"],
+                potion_type=[
+                    potion["red"],
+                    potion["green"],
+                    potion["blue"],
+                    0,
+                ],
+            )
+        )
 
     return catalog
 
