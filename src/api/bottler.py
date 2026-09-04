@@ -5,6 +5,7 @@ from src.api import auth
 from src import database as db
 import sqlalchemy
 
+
 router = APIRouter(
     prefix="/bottler",
     tags=["bottler"],
@@ -19,64 +20,106 @@ class PotionMixes(BaseModel):
         max_length=4,
         description="Must contain exactly 4 elements: [r, g, b, d]",
     )
+
     quantity: int = Field(
-        ..., ge=1, le=10000, description="Quantity must be between 1 and 10,000"
+        ...,
+        ge=1,
+        le=10000,
+        description="Quantity must be between 1 and 10,000",
     )
 
     @field_validator("potion_type")
     @classmethod
     def validate_potion_type(cls, potion_type: List[int]) -> List[int]:
         if sum(potion_type) != 100:
-            raise ValueError("Sum of potion_type values must be exactly 100")
+            raise ValueError(
+                "Sum of potion_type values must be exactly 100"
+            )
         return potion_type
 
 
-@router.post("/deliver/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
-def post_deliver_bottles(potions_delivered: List[PotionMixes], order_id: int):
+@router.post(
+    "/deliver/{order_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def post_deliver_bottles(
+    potions_delivered: List[PotionMixes],
+    order_id: int,
+):
     """
-    Delivery of potions requested after plan. order_id is a unique value representing
-    a single delivery; the call is idempotent based on the order_id.
+    Record delivered potions in the database.
     """
-    print(f"potions delivered: {potions_delivered} order_id: {order_id}")
 
-    red_potions = 0; green_potions = 0; blue_potions = 0
-    red_ml_used = 0; green_ml_used = 0; blue_ml_used = 0
-
-    # TODO: Record values of delivered potions in your database.
-    for potion in potions_delivered:
-        if potion.potion_type == [100, 0, 0, 0]:
-            red_potions += potion.quantity
-            red_ml_used += potion.quantity * 100
-        elif potion.potion_type == [0, 100, 0, 0]:
-            green_potions += potion.quantity
-            green_ml_used += potion.quantity * 100
-        elif potion.potion_type == [0, 0, 100, 0]:
-            blue_potions += potion.quantity
-            blue_ml_used += potion.quantity * 100
-    # TODO: Subtract ml based on how much delivered potions used.
     with db.engine.begin() as connection:
-        connection.execute(
-            sqlalchemy.text(
-                """
-                UPDATE global_inventory
-                SET
-                    red_ml = red_ml - :red_ml_used,
-                    green_ml = green_ml - :green_ml_used,
-                    blue_ml = blue_ml - :blue_ml_used,
-                    red_potions = red_potions + :red_potions,
-                    green_potions = green_potions + :green_potions,
-                    blue_potions = blue_potions + :blue_potions
-                """
-            ),
-            {
-                "red_ml_used": red_ml_used,
-                "green_ml_used": green_ml_used,
-                "blue_ml_used": blue_ml_used,
-                "red_potions": red_potions,
-                "green_potions": green_potions,
-                "blue_potions": blue_potions,
-            },
-        )
+
+        for potion in potions_delivered:
+
+            red = potion.potion_type[0]
+            green = potion.potion_type[1]
+            blue = potion.potion_type[2]
+
+            # Find the matching potion in the database
+            potion_row = connection.execute(
+                sqlalchemy.text(
+                    """
+                    SELECT
+                        potion_id,
+                        sku
+                    FROM potions
+                    WHERE red = :red
+                      AND green = :green
+                      AND blue = :blue
+                    """
+                ),
+                {
+                    "red": red,
+                    "green": green,
+                    "blue": blue,
+                },
+            ).mappings().first()
+
+            # If the potion type does not exist,
+            # we cannot add it to inventory.
+            if potion_row is None:
+                continue
+
+            # Calculate how many ml were used
+            red_ml_used = potion.quantity * red
+            green_ml_used = potion.quantity * green
+            blue_ml_used = potion.quantity * blue
+
+            # Remove ingredients
+            connection.execute(
+                sqlalchemy.text(
+                    """
+                    UPDATE global_inventory
+                    SET
+                        red_ml = red_ml - :red_ml_used,
+                        green_ml = green_ml - :green_ml_used,
+                        blue_ml = blue_ml - :blue_ml_used
+                    """
+                ),
+                {
+                    "red_ml_used": red_ml_used,
+                    "green_ml_used": green_ml_used,
+                    "blue_ml_used": blue_ml_used,
+                },
+            )
+
+            # Add finished potions to inventory
+            connection.execute(
+                sqlalchemy.text(
+                    """
+                    UPDATE potions
+                    SET quantity = quantity + :quantity
+                    WHERE potion_id = :potion_id
+                    """
+                ),
+                {
+                    "quantity": potion.quantity,
+                    "potion_id": potion_row["potion_id"],
+                },
+            )
 
 
 def create_bottle_plan(
@@ -84,50 +127,91 @@ def create_bottle_plan(
     green_ml: int,
     blue_ml: int,
     maximum_potion_capacity: int,
-    current_potion_inventory: List[PotionMixes],
 ) -> List[PotionMixes]:
 
-    TARGET_PER_COLOR = 20
-
-    red_to_make = min(red_ml // 100, TARGET_PER_COLOR)
-    green_to_make = min(green_ml // 100, TARGET_PER_COLOR)
-    blue_to_make = min(blue_ml // 100, TARGET_PER_COLOR)
+    with db.engine.begin() as connection:
+        potions = connection.execute(
+            sqlalchemy.text(
+                """
+                SELECT
+                    red,
+                    green,
+                    blue,
+                    quantity
+                FROM potions
+                """
+            )
+        ).mappings().all()
 
     plan = []
 
-    if red_to_make > 0:
+    remaining_capacity = maximum_potion_capacity
+
+    for potion in potions:
+
+        if remaining_capacity <= 0:
+            break
+
+        # Calculate how many of this potion can be made
+        possible_amounts = []
+
+        if potion["red"] > 0:
+            possible_amounts.append(
+                red_ml // potion["red"]
+            )
+
+        if potion["green"] > 0:
+            possible_amounts.append(
+                green_ml // potion["green"]
+            )
+
+        if potion["blue"] > 0:
+            possible_amounts.append(
+                blue_ml // potion["blue"]
+            )
+
+        # If no potion can be made, skip it
+        if not possible_amounts:
+            continue
+
+        amount_to_make = min(
+            min(possible_amounts),
+            remaining_capacity,
+        )
+
+        if amount_to_make <= 0:
+            continue
+
         plan.append(
             PotionMixes(
-                potion_type=[100, 0, 0, 0],
-                quantity=red_to_make,
+                potion_type=[
+                    potion["red"],
+                    potion["green"],
+                    potion["blue"],
+                    0,
+                ],
+                quantity=amount_to_make,
             )
         )
 
-    if green_to_make > 0:
-        plan.append(
-            PotionMixes(
-                potion_type=[0, 100, 0, 0],
-                quantity=green_to_make,
-            )
-        )
+        # Reserve the ingredients for this plan
+        red_ml -= amount_to_make * potion["red"]
+        green_ml -= amount_to_make * potion["green"]
+        blue_ml -=amount_to_make * potion["blue"]
 
-    if blue_to_make > 0:
-        plan.append(
-            PotionMixes(
-                potion_type=[0, 0, 100, 0],
-                quantity=blue_to_make,
-            )
-        )
+        remaining_capacity -= amount_to_make
 
     return plan
 
 
-@router.post("/plan", response_model=List[PotionMixes])
+@router.post(
+    "/plan",
+    response_model=List[PotionMixes],
+)
 def get_bottle_plan():
     """
-    Gets the plan for bottling potions.
-    Each bottle has a quantity of what proportion of red, green, blue, and dark potions to add.
-    Colors are expressed in integers from 0 to 100 that must sum up to exactly 100.
+    Gets a bottling plan based on potion recipes
+    stored in the database.
     """
 
     with db.engine.begin() as connection:
@@ -140,15 +224,13 @@ def get_bottle_plan():
                     blue_ml
                 FROM global_inventory
                 """
-            )
-        ).one()
+            )).mappings().one()
 
     return create_bottle_plan(
-        red_ml=row.red_ml,
-        green_ml=row.green_ml,
-        blue_ml=row.blue_ml,
-        maximum_potion_capacity=50,
-        current_potion_inventory=[],
+        red_ml=row["red_ml"],
+        green_ml=row["green_ml"],
+        blue_ml=row["blue_ml"],
+        maximum_potion_capacity = 50,
     )
 
 

@@ -19,64 +19,42 @@ class CatalogItem(BaseModel):
         description="Must contain exactly 4 elements: [r, g, b, d]",
     )
 
-def calculate_price(inventory: int) -> int:
-    if inventory <= 3:
-        return 50
-    elif inventory <= 10:
-        return 30
-    else:
-        return 25
-
 
 # Placeholder function, you will replace this with a database call
 def create_catalog() -> List[CatalogItem]:
-    catalog = []
 
     with db.engine.begin() as connection:
-        row = connection.execute(
+        rows = connection.execute(
             sqlalchemy.text(
-                """
-                SELECT
-                    red_potions,
-                    green_potions,
-                    blue_potions
-                FROM global_inventory
-                """
+            """
+            SELECT 
+            sku,
+            name,
+            red,
+            green,
+            blue,
+            quantity,
+            price
+            FROM potions
+            WHERE quantity > 0
+            LIMIT 6
+            """
             )
-        ).one()
+        ).mappings().all() 
 
-    if row.red_potions > 0:
-        catalog.append(
-            CatalogItem(
-                sku="RED_POTION_0",
-                name="red potion",
-                quantity=row.red_potions,
-                price=calculate_price(row.red_potions),
-                potion_type=[100, 0, 0, 0],
-            )
-        )
+    catalog = []
 
-    if row.green_potions > 0:
-        catalog.append(
-            CatalogItem(
-                sku="GREEN_POTION_0",
-                name="green potion",
-                quantity=row.green_potions,
-                price=calculate_price(row.green_potions),
-                potion_type=[0, 100, 0, 0],
-            )
-        )
+    for row in rows: 
+        catalog.append( 
+            CatalogItem( 
+                sku=row["sku"], 
+                name=row["name"], 
+                quantity=row["quantity"], 
+                price=row["price"], 
+                potion_type=[ row["red"], row["green"], row["blue"], 0, ], 
+            ) 
+        ) 
 
-    if row.blue_potions > 0:
-        catalog.append(
-            CatalogItem(
-                sku="BLUE_POTION_0",
-                name="blue potion",
-                quantity=row.blue_potions,
-                price=calculate_price(row.blue_potions),
-                potion_type=[0, 0, 100, 0],
-            )
-        )
     return catalog
 
 
