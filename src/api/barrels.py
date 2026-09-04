@@ -153,40 +153,60 @@ def create_barrel_plan(
 
     return orders
 
-
 @router.post("/plan", response_model=List[BarrelOrder])
-def get_wholesale_purchase_plan(wholesale_catalog: List[Barrel]):
+def get_wholesale_purchase_plan(
+    wholesale_catalog: List[Barrel],
+):
     """
-    Gets the plan for purchasing wholesale barrels. The call passes in a catalog of available barrels and the shop returns back which barrels they'd like to purchase and how many.
+    Creates a barrel purchase plan based on current
+    V2 potion and ingredient inventory.
     """
-
-    print(f"barrel catalog: {wholesale_catalog}")
 
     with db.engine.begin() as connection:
-        row = connection.execute(
+
+        inventory = connection.execute(
             sqlalchemy.text(
                 """
                 SELECT
                     gold,
                     red_ml,
                     green_ml,
-                    blue_ml,
-                    red_potions,
-                    green_potions,
-                    blue_potions
+                    blue_ml
                 FROM global_inventory
                 """
             )
-        ).one()
+        ).mappings().one()
+
+        potions = connection.execute(
+            sqlalchemy.text(
+                """
+                SELECT
+                    sku,
+                    quantity
+                FROM potions
+                """
+            )
+        ).mappings().all()
+
+    potion_inventory = {
+        potion["sku"]: potion["quantity"]
+        for potion in potions
+    }
 
     return create_barrel_plan(
-        gold=row.gold,
+        gold=inventory["gold"],
         max_barrel_capacity=10000,
-        current_red_ml=row.red_ml,
-        current_green_ml=row.green_ml,
-        current_blue_ml=row.blue_ml,
-        current_red_potions=row.red_potions,
-        current_green_potions=row.green_potions,
-        current_blue_potions=row.blue_potions,
+        current_red_ml=inventory["red_ml"],
+        current_green_ml=inventory["green_ml"],
+        current_blue_ml=inventory["blue_ml"],
+        current_red_potions=potion_inventory.get(
+            "RED_POTION_0", 0
+        ),
+        current_green_potions=potion_inventory.get(
+            "GREEN_POTION_0", 0
+        ),
+        current_blue_potions=potion_inventory.get(
+            "BLUE_POTION_0", 0
+        ),
         wholesale_catalog=wholesale_catalog,
     )
