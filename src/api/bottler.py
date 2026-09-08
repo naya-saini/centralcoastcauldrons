@@ -136,23 +136,21 @@ def create_bottle_plan(
                 SELECT
                     red,
                     green,
-                    blue,
-                    quantity
+                    blue
                 FROM potions
                 """
             )
         ).mappings().all()
 
     plan = []
-
     remaining_capacity = maximum_potion_capacity
 
     for potion in potions:
 
+        # Stop when we reach the 50-potion limit
         if remaining_capacity <= 0:
             break
 
-        # Calculate how many of this potion can be made
         possible_amounts = []
 
         if potion["red"] > 0:
@@ -170,10 +168,11 @@ def create_bottle_plan(
                 blue_ml // potion["blue"]
             )
 
-        # If no potion can be made, skip it
+        # Skip invalid recipes
         if not possible_amounts:
             continue
 
+        # Never make more than the remaining capacity
         amount_to_make = min(
             min(possible_amounts),
             remaining_capacity,
@@ -194,20 +193,22 @@ def create_bottle_plan(
             )
         )
 
-        # Reserve the ingredients for this plan
+        # Reserve the ingredients
         red_ml -= amount_to_make * potion["red"]
         green_ml -= amount_to_make * potion["green"]
-        blue_ml -=amount_to_make * potion["blue"]
+        blue_ml -= amount_to_make * potion["blue"]
 
+        # Reduce available inventory space
         remaining_capacity -= amount_to_make
+
+    print(
+        "TOTAL POTIONS PLANNED:",
+        sum(potion.quantity for potion in plan)
+    )
 
     return plan
 
 
-@router.post(
-    "/plan",
-    response_model=List[PotionMixes],
-)
 @router.post(
     "/plan",
     response_model=List[PotionMixes],
