@@ -208,6 +208,10 @@ def create_bottle_plan(
     "/plan",
     response_model=List[PotionMixes],
 )
+@router.post(
+    "/plan",
+    response_model=List[PotionMixes],
+)
 def get_bottle_plan():
     """
     Gets a bottling plan based on potion recipes
@@ -215,7 +219,8 @@ def get_bottle_plan():
     """
 
     with db.engine.begin() as connection:
-        row = connection.execute(
+
+        inventory = connection.execute(
             sqlalchemy.text(
                 """
                 SELECT
@@ -224,13 +229,25 @@ def get_bottle_plan():
                     blue_ml
                 FROM global_inventory
                 """
-            )).mappings().one()
+            )
+        ).mappings().one()
+
+        current_potions = connection.execute(
+            sqlalchemy.text(
+                """
+                SELECT COALESCE(SUM(quantity), 0)
+                FROM potions
+                """
+            )
+        ).scalar_one()
+
+    remaining_capacity = max(0, 50 - current_potions)
 
     return create_bottle_plan(
-        red_ml=row["red_ml"],
-        green_ml=row["green_ml"],
-        blue_ml=row["blue_ml"],
-        maximum_potion_capacity = 50,
+        red_ml=inventory["red_ml"],
+        green_ml=inventory["green_ml"],
+        blue_ml=inventory["blue_ml"],
+        maximum_potion_capacity=remaining_capacity,
     )
 
 
