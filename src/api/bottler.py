@@ -25,7 +25,6 @@ class PotionMixes(BaseModel):
         ...,
         ge=1,
         le=10000,
-        description="Quantity must be between 1 and 10,000",
     )
 
     @field_validator("potion_type")
@@ -46,9 +45,7 @@ def post_deliver_bottles(
     potions_delivered: List[PotionMixes],
     order_id: int,
 ):
-    """
-    Record delivered potions in the database.
-    """
+    """Record delivered potions in the database."""
 
     with db.engine.begin() as connection:
 
@@ -58,13 +55,10 @@ def post_deliver_bottles(
             green = potion.potion_type[1]
             blue = potion.potion_type[2]
 
-            # Find the matching potion in the database
             potion_row = connection.execute(
                 sqlalchemy.text(
                     """
-                    SELECT
-                        potion_id,
-                        sku
+                    SELECT potion_id
                     FROM potions
                     WHERE red = :red
                       AND green = :green
@@ -78,17 +72,14 @@ def post_deliver_bottles(
                 },
             ).mappings().first()
 
-            # If the potion type does not exist,
-            # we cannot add it to inventory.
             if potion_row is None:
                 continue
 
-            # Calculate how many ml were used
             red_ml_used = potion.quantity * red
             green_ml_used = potion.quantity * green
             blue_ml_used = potion.quantity * blue
 
-            # Remove ingredients
+            # Remove the ML used to make the potions
             connection.execute(
                 sqlalchemy.text(
                     """
@@ -106,7 +97,7 @@ def post_deliver_bottles(
                 },
             )
 
-            # Add finished potions to inventory
+            # Add the completed potions
             connection.execute(
                 sqlalchemy.text(
                     """
@@ -147,7 +138,7 @@ def create_bottle_plan(
 
     for potion in potions:
 
-        # Stop when we reach the 50-potion limit
+        # Never exceed the capacity limit
         if remaining_capacity <= 0:
             break
 
@@ -168,11 +159,10 @@ def create_bottle_plan(
                 blue_ml // potion["blue"]
             )
 
-        # Skip invalid recipes
+        # Skip recipes with no available ingredients
         if not possible_amounts:
             continue
 
-        # Never make more than the remaining capacity
         amount_to_make = min(
             min(possible_amounts),
             remaining_capacity,
@@ -193,18 +183,13 @@ def create_bottle_plan(
             )
         )
 
-        # Reserve the ingredients
+        # Reserve the ML
         red_ml -= amount_to_make * potion["red"]
         green_ml -= amount_to_make * potion["green"]
         blue_ml -= amount_to_make * potion["blue"]
 
-        # Reduce available inventory space
+        # Track available potion space
         remaining_capacity -= amount_to_make
-
-    print(
-        "TOTAL POTIONS PLANNED:",
-        sum(potion.quantity for potion in plan)
-    )
 
     return plan
 
@@ -214,10 +199,7 @@ def create_bottle_plan(
     response_model=List[PotionMixes],
 )
 def get_bottle_plan():
-    """
-    Gets a bottling plan based on potion recipes
-    stored in the database.
-    """
+    """Gets a bottling plan based on the current inventory."""
 
     with db.engine.begin() as connection:
 
@@ -242,6 +224,7 @@ def get_bottle_plan():
             )
         ).scalar_one()
 
+    # Maximum allowed inventory is 50 potions
     remaining_capacity = max(0, 50 - current_potions)
 
     return create_bottle_plan(
