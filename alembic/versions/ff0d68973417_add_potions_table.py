@@ -38,7 +38,6 @@ def upgrade() -> None:
             nullable=False,
         ),
 
-        # Potion recipe percentages
         sa.Column(
             "red",
             sa.Integer(),
@@ -57,7 +56,6 @@ def upgrade() -> None:
             nullable=False,
         ),
 
-        # Finished potion inventory
         sa.Column(
             "quantity",
             sa.Integer(),
@@ -65,7 +63,6 @@ def upgrade() -> None:
             server_default="0",
         ),
 
-        # Catalog price
         sa.Column(
             "price",
             sa.Integer(),
@@ -73,7 +70,6 @@ def upgrade() -> None:
         ),
     )
 
-    # Starting potion types
     op.execute("""
         INSERT INTO potions (
             red,
