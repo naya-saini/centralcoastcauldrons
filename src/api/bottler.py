@@ -73,7 +73,9 @@ def post_deliver_bottles(
             ).mappings().first()
 
             if potion_row is None:
-                continue
+                raise ValueError(
+                    f"No potion recipe found for " f"red={red}, green={green}, blue={blue}"
+                )
 
             red_ml_used = potion.quantity * red
             green_ml_used = potion.quantity * green
