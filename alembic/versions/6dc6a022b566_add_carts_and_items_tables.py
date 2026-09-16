@@ -38,7 +38,7 @@ def upgrade() -> None:
         sa.Column(
             "customer_class",
             sa.String(),
-            server_default="open",
+            nullable=False,
         ),
 
         sa.Column(
