@@ -31,13 +31,14 @@ def upgrade() -> None:
         sa.Column(
             "customer_id",
             sa.String(),
+            sa.ForeignKey("customers.customer_id"),
             nullable=False,
         ),
 
         sa.Column(
             "customer_class",
             sa.String(),
-            nullable=False,
+            sa.ForeignKey("customers.customer_class"),
             server_default="open",
         ),
 
