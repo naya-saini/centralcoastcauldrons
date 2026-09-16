@@ -195,7 +195,7 @@ def get_wholesale_purchase_plan(
 
     return create_barrel_plan(
         gold=inventory["gold"],
-        max_barrel_capacity=10000,
+        max_barrel_capacity=10000000,
         current_red_ml=inventory["red_ml"],
         current_green_ml=inventory["green_ml"],
         current_blue_ml=inventory["blue_ml"],
