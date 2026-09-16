@@ -38,7 +38,6 @@ def upgrade() -> None:
         sa.Column(
             "customer_class",
             sa.String(),
-            sa.ForeignKey("customers.customer_class"),
             server_default="open",
         ),
 
