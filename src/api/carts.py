@@ -56,7 +56,6 @@ def search_orders(
 
 class Customer(BaseModel):
     customer_id: str
-    customer_class: str
     customer_name: str
     character_class: str
     character_species: str
@@ -85,13 +84,11 @@ def create_cart(new_cart: Customer):
                 """
                 INSERT INTO carts (
                     customer_id,
-                    customer_class,
                     customer_name,
                     status
                 )
                 VALUES (
                     :customer_id,
-                    :customer_class,
                     :customer_name,
                     'open'
                 )
@@ -100,7 +97,6 @@ def create_cart(new_cart: Customer):
             ),
             {
                 "customer_id": new_cart.customer_id,
-                "customer_class": new_cart.character_class,
                 "customer_name": new_cart.customer_name,
             },
         ).scalar_one()

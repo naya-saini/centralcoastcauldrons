@@ -36,12 +36,6 @@ def upgrade() -> None:
         ),
 
         sa.Column(
-            "customer_class",
-            sa.String(),
-            nullable=True,
-        ),
-
-        sa.Column(
             "customer_name",
             sa.String(),
             nullable=False,
@@ -95,5 +89,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_column("carts", "customer_class")
+    op.drop_column("carts", "customer_id")
     op.drop_table("cart_items")
