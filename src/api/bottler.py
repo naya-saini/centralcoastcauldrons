@@ -137,9 +137,10 @@ def create_bottle_plan(
 
     plan = []
     remaining_capacity = maximum_potion_capacity
-
+    print(f"Maximum potion capacity: {maximum_potion_capacity}")
+    print(f"potions: {potions}")
     for potion in potions:
-
+        print(f"Processing potion: {potion}")
         # Never exceed the capacity limit
         if remaining_capacity <= 0:
             break
@@ -193,6 +194,7 @@ def create_bottle_plan(
         # Track available potion space
         remaining_capacity -= amount_to_make
 
+    print(f"bottle plan {plan}")
     return plan
 
 
