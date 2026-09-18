@@ -13,32 +13,20 @@ def upgrade():
     op.add_column("global_inventory", sa.Column("red_ml", sa.Integer(), nullable=False, server_default="0"))
     op.add_column("global_inventory", sa.Column("green_ml", sa.Integer(), nullable=False, server_default="0"))
     op.add_column("global_inventory", sa.Column("blue_ml", sa.Integer(), nullable=False, server_default="0"))
-    op.add_column("global_inventory", sa.Column("red_potions", sa.Integer(), nullable=False, server_default="0"))
-    op.add_column("global_inventory", sa.Column("green_potions", sa.Integer(), nullable=False, server_default="0"))
-    op.add_column("global_inventory", sa.Column("blue_potions", sa.Integer(), nullable=False, server_default="0"))
 
     op.create_check_constraint("ck_red_ml_non_negative", "global_inventory", "red_ml >= 0")
     op.create_check_constraint("ck_green_ml_non_negative", "global_inventory", "green_ml >= 0")
     op.create_check_constraint("ck_blue_ml_non_negative", "global_inventory", "blue_ml >= 0")
-    op.create_check_constraint("ck_red_potions_non_negative", "global_inventory", "red_potions >= 0")
-    op.create_check_constraint("ck_green_potions_non_negative", "global_inventory", "green_potions >= 0")
-    op.create_check_constraint("ck_blue_potions_non_negative", "global_inventory", "blue_potions >= 0")
 
 
 def downgrade():
     op.drop_constraint("ck_red_ml_non_negative", "global_inventory", type_="check")
     op.drop_constraint("ck_green_ml_non_negative", "global_inventory", type_="check")
     op.drop_constraint("ck_blue_ml_non_negative", "global_inventory", type_="check")
-    op.drop_constraint("ck_red_potions_non_negative", "global_inventory", type_="check")
-    op.drop_constraint("ck_green_potions_non_negative", "global_inventory", type_="check")
-    op.drop_constraint("ck_blue_potions_non_negative", "global_inventory", type_="check")
 
     op.drop_column("global_inventory", "red_ml")
     op.drop_column("global_inventory", "green_ml")
     op.drop_column("global_inventory", "blue_ml")
-    op.drop_column("global_inventory", "red_potions")
-    op.drop_column("global_inventory", "green_potions")
-    op.drop_column("global_inventory", "blue_potions")
 ```
   - What this does is it will modify your global_inventory table to add new columns for storing each potion color's ml and potion quantity. It also puts a constraint to enforce that those values can't be negative. To now run this script to modify your local database run:
   ```sh

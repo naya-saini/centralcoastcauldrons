@@ -95,20 +95,11 @@ def create_barrel_plan(
     current_red_ml: int,
     current_green_ml: int,
     current_blue_ml: int,
-    current_red_potions: int,
-    current_green_potions: int,
-    current_blue_potions: int,
     wholesale_catalog: List[Barrel],
 ) -> List[BarrelOrder]:
 
     GOLD_RESERVE = 50
     MIN_POTIONS = 10
-
-    potion_counts = {
-        "red": current_red_potions,
-        "green": current_green_potions,
-        "blue": current_blue_potions,
-    }
 
     color_index = {
         "red": 0,
@@ -195,18 +186,9 @@ def get_wholesale_purchase_plan(
 
     return create_barrel_plan(
         gold=inventory["gold"],
-        max_barrel_capacity=100000,
+        max_barrel_capacity=10000,
         current_red_ml=inventory["red_ml"],
         current_green_ml=inventory["green_ml"],
         current_blue_ml=inventory["blue_ml"],
-        current_red_potions=potion_inventory.get(
-            "RED_POTION_0", 0
-        ),
-        current_green_potions=potion_inventory.get(
-            "GREEN_POTION_0", 0
-        ),
-        current_blue_potions=potion_inventory.get(
-            "BLUE_POTION_0", 0
-        ),
         wholesale_catalog=wholesale_catalog,
     )
