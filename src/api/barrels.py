@@ -96,6 +96,7 @@ def create_barrel_plan(
     current_green_ml: int,
     current_blue_ml: int,
     wholesale_catalog: List[Barrel],
+    potion_counts,
 ) -> List[BarrelOrder]:
 
     GOLD_RESERVE = 50
@@ -191,4 +192,5 @@ def get_wholesale_purchase_plan(
         current_green_ml=inventory["green_ml"],
         current_blue_ml=inventory["blue_ml"],
         wholesale_catalog=wholesale_catalog,
+        potion_counts=potion_inventory,
     )
