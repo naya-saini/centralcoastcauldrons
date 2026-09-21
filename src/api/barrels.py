@@ -173,16 +173,27 @@ def get_wholesale_purchase_plan(
             sqlalchemy.text(
                 """
                 SELECT
-                    sku,
-                    quantity
-                FROM potions
+                sku,
+                quantity,
+                red,
+                green,
+                blue
+            FROM potions
                 """
             )
         ).mappings().all()
 
     potion_inventory = {
-        potion["sku"]: potion["quantity"]
-        for potion in potions
+        potion["sku"]: {
+        "quantity": potion["quantity"],
+        "composition": [
+            potion["red"] / 100,
+            potion["green"] / 100,
+            potion["blue"] / 100,
+            0,
+        ],
+    }
+    for potion in potions
     }
 
     return create_barrel_plan(
