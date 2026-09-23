@@ -276,58 +276,66 @@ def create_barrel_plan(
     current_green_ml: int,
     current_blue_ml: int,
     wholesale_catalog: List[Barrel],
-    potion_counts,
 ) -> List[BarrelOrder]:
 
     GOLD_RESERVE = 50
-    MIN_POTIONS = 10
 
     orders = []
     available_gold = gold - GOLD_RESERVE
 
-    # Check each potion
-    for potion_sku, potion_info in potion_counts.items():
+    current_ml = {
+        "red": current_red_ml,
+        "green": current_green_ml,
+        "blue": current_blue_ml,
+    }
 
-        count = potion_info["quantity"]
-        composition = potion_info["composition"]
+    color_index = {
+        "red": 0,
+        "green": 1,
+        "blue": 2,
+    }
 
-        # Don't buy more barrels for this potion
-        # if we already have enough.
-        if count >= MIN_POTIONS:
-            continue
+    total_current_ml = (
+        current_red_ml
+        + current_green_ml
+        + current_blue_ml
+    )
+
+    for color in ["red", "green", "blue"]:
 
         possible_barrels = [
             barrel
             for barrel in wholesale_catalog
-            if barrel.potion_type == composition
+            if barrel.potion_type[color_index[color]] == 1
             and barrel.price <= available_gold
+            and total_current_ml + barrel.ml_per_barrel <= max_barrel_capacity
         ]
 
         if not possible_barrels:
             continue
 
-        best_barrel = min(
-            possible_barrels,
-            key=lambda barrel: barrel.price / barrel.ml_per_barrel,
-        )
+        if current_ml[color] < possible_barrels[0].ml_per_barrel:
 
-        orders.append(
-            BarrelOrder(
-                sku=best_barrel.sku,
-                quantity=1,
+            best_barrel = min(
+                possible_barrels,
+                key=lambda barrel: barrel.price / barrel.ml_per_barrel,
             )
-        )
 
-        available_gold -= best_barrel.price
+            orders.append(
+                BarrelOrder(
+                    sku=best_barrel.sku,
+                    quantity=1,
+                )
+            )
+
+            available_gold -= best_barrel.price
+            total_current_ml += best_barrel.ml_per_barrel
 
     return orders
 
 @router.post("/plan", response_model=List[BarrelOrder])
 def get_wholesale_purchase_plan():
-    """
-    Creates a barrel purchase plan based on current
-    inventory and the wholesale barrel catalog.
-    """
+
     wholesale_catalog = [
         Barrel(
             sku="RED_BARREL",
@@ -397,33 +405,6 @@ def get_wholesale_purchase_plan():
             )
         ).mappings().one()
 
-        potions = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT
-                    sku,
-                    quantity,
-                    red,
-                    green,
-                    blue
-                FROM potions
-                """
-            )
-        ).mappings().all()
-
-    potion_inventory = {
-        potion["sku"]: {
-            "quantity": potion["quantity"],
-            "composition": [
-                potion["red"] / 100,
-                potion["green"] / 100,
-                potion["blue"] / 100,
-                0,
-            ],
-        }
-        for potion in potions
-    }
-
     return create_barrel_plan(
         gold=inventory["gold"],
         max_barrel_capacity=10000,
@@ -431,5 +412,4 @@ def get_wholesale_purchase_plan():
         current_green_ml=inventory["green_ml"],
         current_blue_ml=inventory["blue_ml"],
         wholesale_catalog=wholesale_catalog,
-        potion_counts=potion_inventory,
     )
