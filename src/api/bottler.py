@@ -376,10 +376,33 @@ def get_bottle_plan():
             sqlalchemy.text(
                 """
                 SELECT
-                    red_ml,
-                    green_ml,
-                    blue_ml
-                FROM global_inventory
+                    COALESCE(SUM(
+                        CASE
+                            WHEN a.name = 'Red ML'
+                            THEN ale.change
+                            ELSE 0
+                        END
+                    ), 0) AS red_ml,
+
+                    COALESCE(SUM(
+                        CASE
+                            WHEN a.name = 'Green ML'
+                            THEN ale.change
+                            ELSE 0
+                        END
+                    ), 0) AS green_ml,
+
+                    COALESCE(SUM(
+                        CASE
+                            WHEN a.name = 'Blue ML'
+                            THEN ale.change
+                            ELSE 0
+                        END
+                    ), 0) AS blue_ml
+
+                FROM accounts a
+                LEFT JOIN account_ledger_entries ale
+                    ON a.id = ale.account_id
                 """
             )
         ).mappings().one()
