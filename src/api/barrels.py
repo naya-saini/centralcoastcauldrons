@@ -320,18 +320,39 @@ def create_barrel_plan(
             )
         )
 
-        available_gold -=best_barrel.price
+        available_gold -= best_barrel.price
 
     return orders
 
 @router.post("/plan", response_model=List[BarrelOrder])
-def get_wholesale_purchase_plan(
-    wholesale_catalog: List[Barrel],
-):
+def get_wholesale_purchase_plan():
     """
     Creates a barrel purchase plan based on current
-    V2 potion and ingredient inventory.
+    inventory and the wholesale barrel catalog.
     """
+    wholesale_catalog = [
+        Barrel(
+            sku="RED_BARREL",
+            ml_per_barrel=1000,
+            potion_type=[1, 0, 0, 0],
+            price=100,
+            quantity=1,
+        ),
+        Barrel(
+            sku="GREEN_BARREL",
+            ml_per_barrel=1000,
+            potion_type=[0, 1, 0, 0],
+            price=100,
+            quantity=1,
+        ),
+        Barrel(
+            sku="BLUE_BARREL",
+            ml_per_barrel=1000,
+            potion_type=[0, 0, 1, 0],
+            price=100,
+            quantity=1,
+        ),
+    ]
 
     with db.engine.begin() as connection:
 
@@ -382,27 +403,27 @@ def get_wholesale_purchase_plan(
             sqlalchemy.text(
                 """
                 SELECT
-                sku,
-                quantity,
-                red,
-                green,
-                blue
-            FROM potions
+                    sku,
+                    quantity,
+                    red,
+                    green,
+                    blue
+                FROM potions
                 """
             )
         ).mappings().all()
 
     potion_inventory = {
         potion["sku"]: {
-        "quantity": potion["quantity"],
-        "composition": [
-            potion["red"] / 100,
-            potion["green"] / 100,
-            potion["blue"] / 100,
-            0,
-        ],
-    }
-    for potion in potions
+            "quantity": potion["quantity"],
+            "composition": [
+                potion["red"] / 100,
+                potion["green"] / 100,
+                potion["blue"] / 100,
+                0,
+            ],
+        }
+        for potion in potions
     }
 
     return create_barrel_plan(
