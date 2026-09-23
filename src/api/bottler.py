@@ -45,9 +45,41 @@ def post_deliver_bottles(
     potions_delivered: List[PotionMixes],
     order_id: str,
 ):
-    """Record delivered potions in the database."""
+    """
+    Records delivered potions in the ledger.
+
+    The order_id makes the delivery idempotent:
+    sending the same order twice will not apply it twice.
+    """
 
     with db.engine.begin() as connection:
+
+        existing = connection.execute(
+            sqlalchemy.text(
+                """
+                SELECT order_id
+                FROM processed_requests
+                WHERE order_id = CAST(:order_id AS UUID)
+                """
+            ),
+            {"order_id": order_id},
+        ).first()
+
+        if existing is not None:
+            return
+
+        transaction_id = connection.execute(
+            sqlalchemy.text(
+                """
+                INSERT INTO account_transactions (description)
+                VALUES (:description)
+                RETURNING id
+                """
+            ),
+            {
+                "description": f"Bottling delivery {order_id}",
+            },
+        ).scalar_one()
 
         for potion in potions_delivered:
 
@@ -58,7 +90,7 @@ def post_deliver_bottles(
             potion_row = connection.execute(
                 sqlalchemy.text(
                     """
-                    SELECT potion_id
+                    SELECT potion_id, sku
                     FROM potions
                     WHERE red = :red
                       AND green = :green
@@ -74,44 +106,182 @@ def post_deliver_bottles(
 
             if potion_row is None:
                 raise ValueError(
-                    f"No potion recipe found for " f"red={red}, green={green}, blue={blue}"
+                    f"No potion recipe found for "
+                    f"red={red}, green={green}, blue={blue}"
                 )
 
             red_ml_used = potion.quantity * red
             green_ml_used = potion.quantity * green
             blue_ml_used = potion.quantity * blue
 
-            # Remove the ML used to make the potions
-            connection.execute(
+            red_account = connection.execute(
                 sqlalchemy.text(
                     """
-                    UPDATE global_inventory
-                    SET
-                        red_ml = red_ml - :red_ml_used,
-                        green_ml = green_ml - :green_ml_used,
-                        blue_ml = blue_ml - :blue_ml_used
+                    SELECT id
+                    FROM accounts
+                    WHERE name = 'Red ML'
                     """
-                ),
-                {
-                    "red_ml_used": red_ml_used,
-                    "green_ml_used": green_ml_used,
-                    "blue_ml_used": blue_ml_used,
-                },
-            )
+                )
+            ).scalar_one_or_none()
+
+            if red_account is None:
+                red_account = connection.execute(
+                    sqlalchemy.text(
+                        """
+                        INSERT INTO accounts (name)
+                        VALUES ('Red ML')
+                        RETURNING id
+                        """
+                    )
+                ).scalar_one()
 
             connection.execute(
                 sqlalchemy.text(
                     """
-                    UPDATE potions
-                    SET quantity = quantity + :quantity
-                    WHERE potion_id = :potion_id
+                    INSERT INTO account_ledger_entries
+                        (account_id, account_transaction_id, change)
+                    VALUES
+                        (:account_id, :transaction_id, :change)
                     """
                 ),
                 {
-                    "quantity": potion.quantity,
-                    "potion_id": potion_row["potion_id"],
+                    "account_id": red_account,
+                    "transaction_id": transaction_id,
+                    "change": -red_ml_used,
                 },
             )
+
+            green_account = connection.execute(
+                sqlalchemy.text(
+                    """
+                    SELECT id
+                    FROM accounts
+                    WHERE name = 'Green ML'
+                    """
+                )
+            ).scalar_one_or_none()
+
+            if green_account is None:
+                green_account = connection.execute(
+                    sqlalchemy.text(
+                        """
+                        INSERT INTO accounts (name)
+                        VALUES ('Green ML')
+                        RETURNING id
+                        """
+                    )
+                ).scalar_one()
+
+            connection.execute(
+                sqlalchemy.text(
+                    """
+                    INSERT INTO account_ledger_entries
+                        (account_id, account_transaction_id, change)
+                    VALUES
+                        (:account_id, :transaction_id, :change)
+                    """
+                ),
+                {
+                    "account_id": green_account,
+                    "transaction_id": transaction_id,
+                    "change": -green_ml_used,
+                },
+            )
+
+            blue_account = connection.execute(
+                sqlalchemy.text(
+                    """
+                    SELECT id
+                    FROM accounts
+                    WHERE name = 'Blue ML'
+                    """
+                )
+            ).scalar_one_or_none()
+
+            if blue_account is None:
+                blue_account = connection.execute(
+                    sqlalchemy.text(
+                        """
+                        INSERT INTO accounts (name)
+                        VALUES ('Blue ML')
+                        RETURNING id
+                        """
+                    )
+                ).scalar_one()
+
+            connection.execute(
+                sqlalchemy.text(
+                    """
+                    INSERT INTO account_ledger_entries
+                        (account_id, account_transaction_id, change)
+                    VALUES
+                        (:account_id, :transaction_id, :change)
+                    """
+                ),
+                {
+                    "account_id": blue_account,
+                    "transaction_id": transaction_id,
+                    "change": -blue_ml_used,
+                },
+            )
+
+            potion_account = connection.execute(
+                sqlalchemy.text(
+                    """
+                    SELECT id
+                    FROM accounts
+                    WHERE name = :name
+                    """
+                ),
+                {
+                    "name": potion_row["sku"],
+                },
+            ).scalar_one_or_none()
+
+            if potion_account is None:
+                potion_account = connection.execute(
+                    sqlalchemy.text(
+                        """
+                        INSERT INTO accounts (name)
+                        VALUES (:name)
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "name": potion_row["sku"],
+                    },
+                ).scalar_one()
+
+            connection.execute(
+                sqlalchemy.text(
+                    """
+                    INSERT INTO account_ledger_entries
+                        (account_id, account_transaction_id, change)
+                    VALUES
+                        (:account_id, :transaction_id, :change)
+                    """
+                ),
+                {
+                    "account_id": potion_account,
+                    "transaction_id": transaction_id,
+                    "change": potion.quantity,
+                },
+            )
+
+        connection.execute(
+            sqlalchemy.text(
+                """
+                INSERT INTO processed_requests
+                    (order_id, response)
+                VALUES
+                    (CAST(:order_id AS UUID), :response)
+                """
+            ),
+            {
+                "order_id": order_id,
+                "response": "{}",
+            },
+        )
 
 
 def create_bottle_plan(
