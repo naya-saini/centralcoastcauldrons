@@ -43,7 +43,7 @@ class PotionMixes(BaseModel):
 )
 def post_deliver_bottles(
     potions_delivered: List[PotionMixes],
-    order_id: int,
+    order_id: str,
 ):
     """Record delivered potions in the database."""
 
@@ -99,7 +99,6 @@ def post_deliver_bottles(
                 },
             )
 
-            # Add the completed potions
             connection.execute(
                 sqlalchemy.text(
                     """
@@ -141,7 +140,6 @@ def create_bottle_plan(
     print(f"potions: {potions}")
     for potion in potions:
         print(f"Processing potion: {potion}")
-        # Never exceed the capacity limit
         if remaining_capacity <= 0:
             break
 
@@ -162,7 +160,6 @@ def create_bottle_plan(
                 blue_ml // potion["blue"]
             )
 
-        # Skip recipes with no available ingredients
         if not possible_amounts:
             continue
 
@@ -186,12 +183,10 @@ def create_bottle_plan(
             )
         )
 
-        # Reserve the ML
         red_ml -= amount_to_make * potion["red"]
         green_ml -= amount_to_make * potion["green"]
         blue_ml -= amount_to_make * potion["blue"]
 
-        # Track available potion space
         remaining_capacity -= amount_to_make
 
     print(f"bottle plan {plan}")
@@ -228,7 +223,6 @@ def get_bottle_plan():
             )
         ).scalar_one()
 
-    # Maximum allowed inventory is 50 potions
     remaining_capacity = max(0, 50 - current_potions)
 
     return create_bottle_plan(

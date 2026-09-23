@@ -102,7 +102,7 @@ def get_capacity_plan():
 )
 def deliver_capacity_plan(
     capacity_purchase: CapacityPlan,
-    order_id: int
+    order_id: str
 ):
     """
     Processes the delivery of the planned capacity purchase.
