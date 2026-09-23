@@ -282,26 +282,24 @@ def create_barrel_plan(
     GOLD_RESERVE = 50
     MIN_POTIONS = 10
 
-    color_index = {
-        "red": 0,
-        "green": 1,
-        "blue": 2,
-    }
-
     orders = []
     available_gold = gold - GOLD_RESERVE
 
-    for color, potion_info in potion_counts.items():
+    # Check each potion
+    for potion_sku, potion_info in potion_counts.items():
 
         count = potion_info["quantity"]
+        composition = potion_info["composition"]
 
+        # Don't buy more barrels for this potion
+        # if we already have enough.
         if count >= MIN_POTIONS:
             continue
 
         possible_barrels = [
             barrel
             for barrel in wholesale_catalog
-            if barrel.potion_type[color_index[color]] == 1
+            if barrel.potion_type == composition
             and barrel.price <= available_gold
         ]
 
