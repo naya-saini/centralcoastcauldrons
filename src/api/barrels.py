@@ -291,10 +291,10 @@ def create_barrel_plan(
     orders = []
     available_gold = gold - GOLD_RESERVE
 
-    # Go through every color
-    for color, count in potion_counts.items():
+    for color, potion_info in potion_counts.items():
 
-        # Only buy more if inventory is low
+        count = potion_info["quantity"]
+
         if count >= MIN_POTIONS:
             continue
 
