@@ -48,10 +48,66 @@ def search_orders(
     sort_order: SearchSortOrder = SearchSortOrder.desc,
 ):
     """
-    Search completed order line items by customer name and/or potion SKU.
-    """
+   Search completed order line items by customer name and/or potion SKU.
+   """
+sort_columns = {
+       SearchSortOptions.customer_name: "c.customer_name",
+       SearchSortOptions.item_sku: "p.sku",
+       SearchSortOptions.line_item_total: "(ci.quantity * p.price)",
+       SearchSortOptions.timestamp: "c.created_at",
+   }
 
-    pass
+
+sort_column = sort_columns[sort_col]
+order = sort_order.value.upper()
+
+
+with db.engine.begin() as connection:
+       rows = connection.execute(
+           sqlalchemy.text(
+               f"""
+               SELECT
+                   ci.cart_item_id AS line_item_id,
+                   p.sku AS item_sku,
+                   c.customer_name,
+                   ci.quantity * p.price AS line_item_total,
+                   c.created_at AS timestamp
+               FROM cart_items AS ci
+               JOIN carts AS c
+                   ON ci.cart_id = c.cart_id
+               JOIN potions AS p
+                   ON ci.potion_id = p.potion_id
+               WHERE c.customer_name ILIKE :customer_name
+                 AND p.sku ILIKE :potion_sku
+                 AND c.status = 'checked_out'
+               ORDER BY {sort_column} {order}
+               """
+           ),
+           {
+               "customer_name": f"%{customer_name}%",
+               "potion_sku": f"%{potion_sku}%",
+           },
+       ).mappings().all()
+
+
+results = []
+
+
+for row in rows:
+    results.append(
+           LineItem(
+               line_item_id=row["line_item_id"],
+               item_sku=row["item_sku"],
+               customer_name=row["customer_name"],
+               line_item_total=row["line_item_total"],
+               timestamp=row["timestamp"].isoformat(),
+           )
+       )
+    return SearchResponse(
+       previous=None,
+       next=None,
+       results= results,
+   )
 
 
 class Customer(BaseModel):
