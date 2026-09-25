@@ -272,7 +272,7 @@ def post_deliver_bottles(
                     "change": potion.quantity,
                 },
             )
-                    if potions_delivered:
+            if potions_delivered:
             result = connection.execute(
                 sqlalchemy.text("""
                     UPDATE global_inventory
