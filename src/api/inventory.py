@@ -42,7 +42,6 @@ def get_inventory():
 
     with db.engine.begin() as connection:
 
-        # Get gold and raw ML
         inventory = connection.execute(
             sqlalchemy.text(
                 """

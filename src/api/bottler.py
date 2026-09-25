@@ -80,7 +80,9 @@ def post_deliver_bottles(
                 "description": f"Bottling delivery {order_id}",
             },
         ).scalar_one()
-
+        total_red_used = 0
+        total_green_used = 0
+        total_blue_used = 0
         for potion in potions_delivered:
 
             red = potion.potion_type[0]
@@ -113,6 +115,9 @@ def post_deliver_bottles(
             red_ml_used = potion.quantity * red
             green_ml_used = potion.quantity * green
             blue_ml_used = potion.quantity * blue
+            total_red_used += red_ml_used
+            total_green_used += green_ml_used
+            total_blue_used += blue_ml_used
 
             red_account = connection.execute(
                 sqlalchemy.text(
@@ -267,6 +272,33 @@ def post_deliver_bottles(
                     "change": potion.quantity,
                 },
             )
+                    if potions_delivered:
+            result = connection.execute(
+                sqlalchemy.text("""
+                    UPDATE global_inventory
+                    SET
+                        red_ml = red_ml - :red_used,
+                        green_ml = green_ml - :green_used,
+                        blue_ml = blue_ml - :blue_used
+                    WHERE
+                        red_ml >= :red_used
+                        AND green_ml >= :green_used
+                        AND blue_ml >= :blue_used
+                """),
+                {
+                    "red_used": total_red_used,
+                    "green_used": total_green_used,
+                    "blue_used": total_blue_used,
+                },
+            )
+
+            if result.rowcount != 1:
+                raise ValueError(
+                    "Not enough ML in global inventory "
+                    "or inventory row is missing"
+                )
+
+                        
 
         connection.execute(
             sqlalchemy.text(
@@ -362,68 +394,38 @@ def create_bottle_plan(
     print(f"bottle plan {plan}")
     return plan
 
-
 @router.post(
     "/plan",
     response_model=List[PotionMixes],
 )
 def get_bottle_plan():
-    """Gets a bottling plan based on the current inventory."""
+    """Gets a bottling plan based on global inventory."""
 
     with db.engine.begin() as connection:
-
         inventory = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT
-                    COALESCE(SUM(
-                        CASE
-                            WHEN a.name = 'Red ML'
-                            THEN ale.change
-                            ELSE 0
-                        END
-                    ), 0) AS red_ml,
-
-                    COALESCE(SUM(
-                        CASE
-                            WHEN a.name = 'Green ML'
-                            THEN ale.change
-                            ELSE 0
-                        END
-                    ), 0) AS green_ml,
-
-                    COALESCE(SUM(
-                        CASE
-                            WHEN a.name = 'Blue ML'
-                            THEN ale.change
-                            ELSE 0
-                        END
-                    ), 0) AS blue_ml
-
-                FROM accounts a
-                LEFT JOIN account_ledger_entries ale
-                    ON a.id = ale.account_id
-                """
-            )
+            sqlalchemy.text("""
+                SELECT red_ml, green_ml, blue_ml
+                FROM global_inventory
+            """)
         ).mappings().one()
 
         current_potions = connection.execute(
-            sqlalchemy.text(
-                """
+            sqlalchemy.text("""
                 SELECT COALESCE(SUM(quantity), 0)
                 FROM potions
-                """
-            )
+            """)
         ).scalar_one()
 
-    remaining_capacity = max(0, 50 - current_potions)
+        remaining_capacity = max(
+            0, 50 - current_potions
+        )
 
-    return create_bottle_plan(
-        red_ml=inventory["red_ml"],
-        green_ml=inventory["green_ml"],
-        blue_ml=inventory["blue_ml"],
-        maximum_potion_capacity=remaining_capacity,
-    )
+        return create_bottle_plan(
+            red_ml=inventory["red_ml"],
+            green_ml=inventory["green_ml"],
+            blue_ml=inventory["blue_ml"],
+            maximum_potion_capacity=remaining_capacity,
+        )
 
 
 if __name__ == "__main__":
