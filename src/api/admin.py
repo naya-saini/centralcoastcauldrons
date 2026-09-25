@@ -23,7 +23,7 @@ def reset():
                     gold = 100,
                     red_ml = 0,
                     green_ml = 0,
-                    blue_ml = 0,s
+                    blue_ml = 0,
                 """
             )
         )
