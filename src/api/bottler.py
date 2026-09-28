@@ -55,14 +55,12 @@ def post_deliver_bottles(
     with db.engine.begin() as connection:
 
         existing = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT order_id
-                FROM processed_requests
-                WHERE order_id = CAST(:order_id AS UUID)
-                """
-            ),
-            {"order_id": order_id},
+        sqlalchemy.text("""
+            SELECT order_id
+            FROM processed_requests
+            WHERE order_id = :order_id
+            """),
+            {"order_id": str(order_id)},
         ).first()
 
         if existing is not None:
@@ -152,11 +150,50 @@ def post_deliver_bottles(
                 {
                     "account_id": red_account,
                     "transaction_id": transaction_id,
-                    "change": -red_ml_used,
+                    "change": potion.quantity,
                 },
             )
 
-            green_account = connection.execute(
+            if potions_delivered:
+                result = connection.execute(
+                    sqlalchemy.text("""
+                        UPDATE global_inventory
+                        SET
+                            red_ml = red_ml - :red_used,
+                            green_ml = green_ml - :green_used,
+                            blue_ml = blue_ml - :blue_used
+                        WHERE
+                            red_ml >= :red_used
+                            AND green_ml >= :green_used
+                            AND blue_ml >= :blue_used
+                    """),
+                    {
+                        "red_used": total_red_used,
+                        "green_used": total_green_used,
+                        "blue_used": total_blue_used,
+                    },
+                )
+
+    if result.rowcount != 1:
+        raise ValueError(
+            "Not enough ML in global inventory "
+            "or inventory row is missing"
+        )
+    
+    connection.execute(
+            sqlalchemy.text("""
+                INSERT INTO processed_requests
+                    (order_id, response)
+                VALUES
+                    (:order_id, CAST(:response AS JSONB))
+            """),
+            {
+                "order_id": str(order_id),
+                "response": "{}",
+            },
+        )
+
+    green_account = connection.execute(
                 sqlalchemy.text(
                     """
                     SELECT id
@@ -166,7 +203,7 @@ def post_deliver_bottles(
                 )
             ).scalar_one_or_none()
 
-            if green_account is None:
+    if green_account is None:
                 green_account = connection.execute(
                     sqlalchemy.text(
                         """
@@ -177,7 +214,7 @@ def post_deliver_bottles(
                     )
                 ).scalar_one()
 
-            connection.execute(
+    connection.execute(
                 sqlalchemy.text(
                     """
                     INSERT INTO account_ledger_entries
@@ -193,7 +230,7 @@ def post_deliver_bottles(
                 },
             )
 
-            blue_account = connection.execute(
+    blue_account = connection.execute(
                 sqlalchemy.text(
                     """
                     SELECT id
@@ -203,7 +240,7 @@ def post_deliver_bottles(
                 )
             ).scalar_one_or_none()
 
-            if blue_account is None:
+    if blue_account is None:
                 blue_account = connection.execute(
                     sqlalchemy.text(
                         """
@@ -214,7 +251,7 @@ def post_deliver_bottles(
                     )
                 ).scalar_one()
 
-            connection.execute(
+    connection.execute(
                 sqlalchemy.text(
                     """
                     INSERT INTO account_ledger_entries
@@ -230,7 +267,7 @@ def post_deliver_bottles(
                 },
             )
 
-            potion_account = connection.execute(
+    potion_account = connection.execute(
                 sqlalchemy.text(
                     """
                     SELECT id
@@ -243,7 +280,7 @@ def post_deliver_bottles(
                 },
             ).scalar_one_or_none()
 
-            if potion_account is None:
+    if potion_account is None:
                 potion_account = connection.execute(
                     sqlalchemy.text(
                         """
@@ -257,7 +294,7 @@ def post_deliver_bottles(
                     },
                 ).scalar_one()
 
-            connection.execute(
+    connection.execute(
                 sqlalchemy.text(
                     """
                     INSERT INTO account_ledger_entries
@@ -272,45 +309,21 @@ def post_deliver_bottles(
                     "change": potion.quantity,
                 },
             )
-            if potions_delivered:
-                result = connection.execute(
-                sqlalchemy.text("""
-                    UPDATE global_inventory
-                    SET
-                        red_ml = red_ml - :red_used,
-                        green_ml = green_ml - :green_used,
-                        blue_ml = blue_ml - :blue_used
-                    WHERE
-                        red_ml >= :red_used
-                        AND green_ml >= :green_used
-                        AND blue_ml >= :blue_used
-                """),
-                {
-                    "red_used": total_red_used,
-                    "green_used": total_green_used,
-                    "blue_used": total_blue_used,
-                },
-            )
-
-            if result.rowcount != 1:
-                raise ValueError(
-                    "Not enough ML in global inventory "
-                    "or inventory row is missing"
-                )
+            
 
                         
 
-        connection.execute(
+    connection.execute(
             sqlalchemy.text(
                 """
                 INSERT INTO processed_requests
                     (order_id, response)
                 VALUES
-                    (CAST(:order_id AS UUID), :response)
+                    (:order_id, CAST(:response AS JSONB))
                 """
             ),
             {
-                "order_id": order_id,
+                "order_id": str(order_id),
                 "response": "{}",
             },
         )

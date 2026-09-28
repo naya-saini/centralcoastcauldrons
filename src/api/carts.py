@@ -4,7 +4,6 @@ import sqlalchemy
 from src.api import auth
 from enum import Enum
 from typing import List, Optional
-from uuid import UUID
 from src import database as db
 
 
@@ -273,7 +272,7 @@ class CheckoutResponse(BaseModel):
 
 class CartCheckout(BaseModel):
     payment: str
-    order_id: UUID
+    order_id: str
 
 
 @router.post(
@@ -295,14 +294,12 @@ def checkout(
 
     with db.engine.begin() as connection:
 
-        # Idempotency: return the exact stored response if this order was
-        # already successfully processed.
         processed = connection.execute(
             sqlalchemy.text(
                 """
                 SELECT response
                 FROM processed_requests
-                WHERE order_id = CAST(:order_id AS UUID)
+                WHERE order_id = :order_id
                 """
             ),
             {"order_id": str(cart_checkout.order_id)},
@@ -329,8 +326,6 @@ def checkout(
         ).mappings().first()
 
         if cart is None:
-            # If the cart is already checked out, the idempotency record
-            # should normally have handled the request.
             raise HTTPException(
                 status_code=404,
                 detail="Cart not found or already checked out",
@@ -384,7 +379,6 @@ def checkout(
         total_potions_bought = 0
         total_gold_paid = 0
 
-        # Verify inventory from the ledger, not potions.quantity.
         for item in items:
             inventory_account = f"POTION:{item['sku']}"
 
@@ -411,7 +405,6 @@ def checkout(
             total_potions_bought += item["quantity"]
             total_gold_paid += item["quantity"] * item["price"]
 
-        # Get/create the Gold account.
         gold_account = connection.execute(
             sqlalchemy.text(
                 """
@@ -434,7 +427,6 @@ def checkout(
                 )
             ).scalar_one()
 
-        # Create one transaction describing the complete checkout.
         transaction_id = connection.execute(
             sqlalchemy.text(
                 """
@@ -449,7 +441,6 @@ def checkout(
             },
         ).scalar_one()
 
-        # Credit shop gold.
         connection.execute(
             sqlalchemy.text(
                 """
@@ -466,8 +457,6 @@ def checkout(
             },
         )
 
-        # Decrease potion inventory through ledger entries and create the
-        # Version 4 sales-event rows.
         for item in items:
             inventory_account = f"POTION:{item['sku']}"
 
@@ -550,7 +539,7 @@ def checkout(
                 """
                 INSERT INTO processed_requests (order_id, response)
                 VALUES (
-                    CAST(:order_id AS UUID),
+                    :order_id,
                     CAST(:response AS JSONB)
                 )
                 """
