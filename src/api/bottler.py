@@ -45,20 +45,18 @@ def post_deliver_bottles(
     potions_delivered: List[PotionMixes],
     order_id: str,
 ):
-    """
-    Records delivered potions in the ledger.
-
-    The order_id makes the delivery idempotent:
-    sending the same order twice will not apply it twice.
+    """Records delivered potions in the ledger.
+    Sending the same order twice will not apply it twice.
     """
 
     with db.engine.begin() as connection:
 
+        # 1. Check whether this order was already processed.
         existing = connection.execute(
-        sqlalchemy.text("""
-            SELECT order_id
-            FROM processed_requests
-            WHERE order_id = :order_id
+            sqlalchemy.text("""
+                SELECT order_id
+                FROM processed_requests
+                WHERE order_id = :order_id
             """),
             {"order_id": str(order_id)},
         ).first()
@@ -66,37 +64,32 @@ def post_deliver_bottles(
         if existing is not None:
             return
 
+        # 2. Create a transaction for this delivery.
         transaction_id = connection.execute(
-            sqlalchemy.text(
-                """
+            sqlalchemy.text("""
                 INSERT INTO account_transactions (description)
                 VALUES (:description)
                 RETURNING id
-                """
-            ),
-            {
-                "description": f"Bottling delivery {order_id}",
-            },
+            """),
+            {"description": f"Bottling delivery {order_id}"},
         ).scalar_one()
+
         total_red_used = 0
         total_green_used = 0
         total_blue_used = 0
-        for potion in potions_delivered:
 
-            red = potion.potion_type[0]
-            green = potion.potion_type[1]
-            blue = potion.potion_type[2]
+        # 3. Process each potion and record its ledger entries.
+        for potion in potions_delivered:
+            red, green, blue = potion.potion_type[:3]
 
             potion_row = connection.execute(
-                sqlalchemy.text(
-                    """
+                sqlalchemy.text("""
                     SELECT potion_id, sku
                     FROM potions
                     WHERE red = :red
                       AND green = :green
                       AND blue = :blue
-                    """
-                ),
+                """),
                 {
                     "red": red,
                     "green": green,
@@ -113,79 +106,83 @@ def post_deliver_bottles(
             red_ml_used = potion.quantity * red
             green_ml_used = potion.quantity * green
             blue_ml_used = potion.quantity * blue
+
             total_red_used += red_ml_used
             total_green_used += green_ml_used
             total_blue_used += blue_ml_used
 
-            red_account = connection.execute(
-                sqlalchemy.text(
-                    """
-                    SELECT id
-                    FROM accounts
-                    WHERE name = 'Red ML'
-                    """
-                )
-            ).scalar_one_or_none()
+            # Record ML consumed and potions produced.
+            account_changes = [
+                ("Red ML", -red_ml_used),
+                ("Green ML", -green_ml_used),
+                ("Blue ML", -blue_ml_used),
+                (potion_row["sku"], potion.quantity),
+            ]
 
-            if red_account is None:
-                red_account = connection.execute(
-                    sqlalchemy.text(
-                        """
-                        INSERT INTO accounts (name)
-                        VALUES ('Red ML')
-                        RETURNING id
-                        """
-                    )
-                ).scalar_one()
-
-            connection.execute(
-                sqlalchemy.text(
-                    """
-                    INSERT INTO account_ledger_entries
-                        (account_id, account_transaction_id, change)
-                    VALUES
-                        (:account_id, :transaction_id, :change)
-                    """
-                ),
-                {
-                    "account_id": red_account,
-                    "transaction_id": transaction_id,
-                    "change": potion.quantity,
-                },
-            )
-
-            if potions_delivered:
-                result = connection.execute(
+            for account_name, change in account_changes:
+                account_id = connection.execute(
                     sqlalchemy.text("""
-                        UPDATE global_inventory
-                        SET
-                            red_ml = red_ml - :red_used,
-                            green_ml = green_ml - :green_used,
-                            blue_ml = blue_ml - :blue_used
-                        WHERE
-                            red_ml >= :red_used
-                            AND green_ml >= :green_used
-                            AND blue_ml >= :blue_used
+                        SELECT id
+                        FROM accounts
+                        WHERE name = :name
+                    """),
+                    {"name": account_name},
+                ).scalar_one_or_none()
+
+                if account_id is None:
+                    account_id = connection.execute(
+                        sqlalchemy.text("""
+                            INSERT INTO accounts (name)
+                            VALUES (:name)
+                            RETURNING id
+                        """),
+                        {"name": account_name},
+                    ).scalar_one()
+
+                connection.execute(
+                    sqlalchemy.text("""
+                        INSERT INTO account_ledger_entries
+                            (account_id, account_transaction_id, change)
+                        VALUES
+                            (:account_id, :transaction_id, :change)
                     """),
                     {
-                        "red_used": total_red_used,
-                        "green_used": total_green_used,
-                        "blue_used": total_blue_used,
+                        "account_id": account_id,
+                        "transaction_id": transaction_id,
+                        "change": change,
                     },
                 )
 
-    if result.rowcount != 1:
-        raise ValueError(
-            "Not enough ML in global inventory "
-            "or inventory row is missing"
-        )
-    
-    connection.execute(
+        # 4. Deduct total ML from global inventory ONCE.
+        if potions_delivered:
+            result = connection.execute(
+                sqlalchemy.text("""
+                    UPDATE global_inventory
+                    SET red_ml = red_ml - :red_used,
+                        green_ml = green_ml - :green_used,
+                        blue_ml = blue_ml - :blue_used
+                    WHERE red_ml >= :red_used
+                      AND green_ml >= :green_used
+                      AND blue_ml >= :blue_used
+                """),
+                {
+                    "red_used": total_red_used,
+                    "green_used": total_green_used,
+                    "blue_used": total_blue_used,
+                },
+            )
+
+            if result.rowcount != 1:
+                raise ValueError(
+                    "Not enough ML in global inventory "
+                    "or inventory row is missing"
+                )
+
+        # 5. Mark the order as processed ONCE.
+        connection.execute(
             sqlalchemy.text("""
-                INSERT INTO processed_requests
-                    (order_id, response)
-                VALUES
-                    (:order_id, CAST(:response AS JSONB))
+                INSERT INTO processed_requests (order_id, response)
+                VALUES (:order_id, CAST(:response AS JSONB))
             """),
             {
                 "order_id": str(order_id),
