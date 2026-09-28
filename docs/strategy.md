@@ -1,0 +1,1 @@
+I believe the best strategy would be to increase my capacity slowly until I have a good amount of space to then maximize all that my shop has to offer. Avoiding syntax errors and making sure to properly debug in a time concious way instead of putting it off would also be way more productive.

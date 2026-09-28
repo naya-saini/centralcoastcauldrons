@@ -27,6 +27,8 @@ Version 4 metrics
         hour_of_day,
         potion_sku;
 
+    ![Project Screenshot](centralcoastcauldrons/images/image1.png)
+    
 2. A table of all barrel types, when the barrel type is offered, what liquid type it contains, and the cost per ml.
     SELECT
         sku,
@@ -81,6 +83,8 @@ POTIONS:
     ORDER BY
         level,
         potion_sku;
+
+    ![Project Screenshot](/Users/inayatsaini/csc3660/centralcoastcauldrons/images/image3.png)
 
 4. An additional visualization of your choosing that tells you something the above three visualizations don't.
 Gold spent per class
