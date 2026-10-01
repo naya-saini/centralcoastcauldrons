@@ -268,11 +268,8 @@ def set_item_quantity(
 class CheckoutResponse(BaseModel):
     total_potions_bought: int
     total_gold_paid: int
-
-
 class CartCheckout(BaseModel):
     payment: str
-    order_id: str
 
 
 @router.post(
@@ -288,12 +285,17 @@ def checkout(
 
     Inventory is not changed directly. Potion inventory is represented by
     POTION:<sku> ledger accounts, while customer payments are credited to
-    the Gold account. A potion_sales row is also written for Version 4
-    analytics.
+    the Gold account. A potion_sales row is also written for analytics.
+
+    The frontend does not need to provide an order_id.
+    The backend generates one from the cart_id.
     """
+
+    order_id = f"cart-{cart_id}"
 
     with db.engine.begin() as connection:
 
+        # Check whether this cart/order has already been processed.
         processed = connection.execute(
             sqlalchemy.text(
                 """
@@ -302,14 +304,16 @@ def checkout(
                 WHERE order_id = :order_id
                 """
             ),
-            {"order_id": str(cart_checkout.order_id)},
+            {"order_id": order_id},
         ).scalar_one_or_none()
 
         if processed is not None:
             response_data = processed
+
             if isinstance(response_data, str):
                 import json
                 response_data = json.loads(response_data)
+
             return CheckoutResponse(**response_data)
 
         cart = connection.execute(
@@ -436,8 +440,10 @@ def checkout(
                 """
             ),
             {
-                "description": f"Potion sale for cart {cart_id}, "
-                               f"order {cart_checkout.order_id}"
+                "description": (
+                    f"Potion sale for cart {cart_id}, "
+                    f"order {order_id}"
+                )
             },
         ).scalar_one()
 
@@ -532,8 +538,6 @@ def checkout(
             "total_potions_bought": total_potions_bought,
             "total_gold_paid": total_gold_paid,
         }
-
-        # Store the response so the same order_id returns the same result.
         connection.execute(
             sqlalchemy.text(
                 """
@@ -545,11 +549,10 @@ def checkout(
                 """
             ),
             {
-                "order_id": str(cart_checkout.order_id),
+                "order_id": order_id,
                 "response": __import__("json").dumps(response_data),
             },
         )
-
         connection.execute(
             sqlalchemy.text(
                 """
