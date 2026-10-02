@@ -291,7 +291,7 @@ def checkout(
     """
 
     order_id = f"cart-{cart_id}"
-
+    print(f"Processing checkout for cart {cart_id}")
     with db.engine.begin() as connection:
 
         processed = connection.execute(
@@ -323,7 +323,6 @@ def checkout(
                     customer_name
                 FROM carts
                 WHERE cart_id = :cart_id
-                  AND status = 'open'
                 FOR UPDATE
                 """
             ),
@@ -340,7 +339,8 @@ def checkout(
             sqlalchemy.text(
                 """
                 SELECT
-                    ci.quantity,
+                    ci.quantity as requested_quantity,
+                    p.quantity as inventory_quantity,
                     p.potion_id,
                     p.sku,
                     p.price
@@ -349,6 +349,7 @@ def checkout(
                     ON ci.potion_id = p.potion_id
                 WHERE ci.cart_id = :cart_id
                 ORDER BY p.potion_id
+                FOR UPDATE
                 """
             ),
             {"cart_id": cart_id},
@@ -360,103 +361,14 @@ def checkout(
                 detail="Cart is empty",
             )
 
-        locked_items = []
-
-        for item in items:
-
-            potion = connection.execute(
-                sqlalchemy.text(
-                    """
-                    SELECT
-                        potion_id,
-                        sku,
-                        quantity,
-                        price
-                    FROM potions
-                    WHERE potion_id = :potion_id
-                    FOR UPDATE
-                    """
-                ),
-                {"potion_id": item["potion_id"]},
-            ).mappings().first()
-
-            if potion is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Potion {item['sku']} not found",
-                )
-            inventory_account = f"POTION:{potion['sku']}"
-
-            potion_account = connection.execute(
-                sqlalchemy.text(
-                    """
-                    SELECT id
-                    FROM accounts
-                    WHERE name = :account_name
-                    FOR UPDATE
-                    """
-                ),
-                {"account_name": inventory_account},
-            ).scalar_one_or_none()
-
-            if potion_account is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        f"Ledger account missing for "
-                        f"{potion['sku']}"
-                    ),
-                )
-
-            ledger_available = connection.execute(
-                sqlalchemy.text(
-                    """
-                    SELECT COALESCE(SUM(le.change), 0)
-                    FROM account_ledger_entries AS le
-                    WHERE le.account_id = :account_id
-                    """
-                ),
-                {"account_id": potion_account},
-            ).scalar_one()
-
-            if potion["quantity"] != ledger_available:
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        f"Inventory mismatch for {potion['sku']}. "
-                        f"potions.quantity={potion['quantity']}, "
-                        f"ledger={ledger_available}"
-                    ),
-                )
-
-            if item["quantity"] > potion["quantity"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Not enough {potion['sku']} in inventory. "
-                        f"Available: {potion['quantity']}"
-                    ),
-                )
-
-            locked_items.append(
-                {
-                    "quantity": item["quantity"],
-                    "potion_id": potion["potion_id"],
-                    "sku": potion["sku"],
-                    "price": potion["price"],
-                    "account_id": potion_account,
-                    "available": potion["quantity"],
-                }
-            )
-
         total_potions_bought = sum(
-            item["quantity"]
-            for item in locked_items
+            item["requested_quantity"]
+            for item in items
         )
 
         total_gold_paid = sum(
-            item["quantity"] * item["price"]
-            for item in locked_items
+            item["requested_quantity"] * item["price"]
+            for item in items
         )
 
         gold_account = connection.execute(
@@ -520,44 +432,19 @@ def checkout(
                 "change": total_gold_paid,
             },
         )
-        for item in locked_items:
+        for item in items:
 
-            # A. Deduct from potion ledger
-            connection.execute(
-                sqlalchemy.text(
-                    """
-                    INSERT INTO account_ledger_entries
-                        (
-                            account_id,
-                            account_transaction_id,
-                            change
-                        )
-                    VALUES
-                        (
-                            :account_id,
-                            :transaction_id,
-                            :change
-                        )
-                    """
-                ),
-                {
-                    "account_id": item["account_id"],
-                    "transaction_id": transaction_id,
-                    "change": -item["quantity"],
-                },
-            )
             update_result = connection.execute(
                 sqlalchemy.text(
                     """
                     UPDATE potions
                     SET quantity = quantity - :quantity
                     WHERE potion_id = :potion_id
-                      AND quantity >= :quantity
                     """
                 ),
                 {
                     "potion_id": item["potion_id"],
-                    "quantity": item["quantity"],
+                    "quantity": item["requested_quantity"],
                 },
             )
 
@@ -569,40 +456,6 @@ def checkout(
                         f"in inventory."
                     ),
                 )
-
-            connection.execute(
-                sqlalchemy.text(
-                    """
-                    INSERT INTO potion_sales (
-                        potion_sku,
-                        quantity,
-                        unit_price,
-                        customer_id,
-                        customer_class,
-                        character_species,
-                        level
-                    )
-                    VALUES (
-                        :potion_sku,
-                        :quantity,
-                        :unit_price,
-                        :customer_id,
-                        :customer_class,
-                        :character_species,
-                        :level
-                    )
-                    """
-                ),
-                {
-                    "potion_sku": item["sku"],
-                    "quantity": item["quantity"],
-                    "unit_price": item["price"],
-                    "customer_id": cart["customer_id"],
-                    "customer_class": None,
-                    "character_species": None,
-                    "level": None,
-                },
-            )
 
         response_data = {
             "total_potions_bought": total_potions_bought,
