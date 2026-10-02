@@ -295,7 +295,6 @@ def checkout(
 
     with db.engine.begin() as connection:
 
-        # Check whether this cart/order has already been processed.
         processed = connection.execute(
             sqlalchemy.text(
                 """
@@ -335,27 +334,13 @@ def checkout(
                 detail="Cart not found or already checked out",
             )
 
-        customer = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT
-                    customer_id,
-                    customer_name,
-                    character_class,
-                    character_species,
-                    level
-                FROM customers
-                WHERE customer_id = :customer_id
-                """
-            ),
-            {"customer_id": cart["customer_id"]},
-        ).mappings().first()
-
-        if customer is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Customer not found",
-            )
+        customer = {
+    "customer_id": cart["customer_id"],
+    "customer_name": cart["customer_name"],
+    "character_class": None,
+    "character_species": None,
+    "level": None,
+}
 
         items = connection.execute(
             sqlalchemy.text(
