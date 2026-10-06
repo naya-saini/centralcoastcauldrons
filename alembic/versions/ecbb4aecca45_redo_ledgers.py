@@ -20,10 +20,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.execute("""
+        drop view if exists inventory_balances;
+        drop table if exists processed_requests;
+        drop table if exists ledger_entries;
+        drop table if exists inventory_transactions;
         drop table if exists account_ledger_entries;
         drop table if exists account_transactions;
         drop table if exists accounts;
-        
+
         create table inventory_transactions (
             id          serial primary key,
             created_at  timestamptz not null default now(),
