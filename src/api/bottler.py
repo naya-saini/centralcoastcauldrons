@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 from typing import List
 
+import sqlalchemy
+
 from src.api import auth
 from src import database as db
-
-import sqlalchemy
 
 
 router = APIRouter(
@@ -16,597 +16,363 @@ router = APIRouter(
 
 
 class PotionMixes(BaseModel):
-    potion_type: List[int] = Field(
-        ...,
-        min_length=4,
-        max_length=4,
-        description="Must contain exactly 4 elements: [r, g, b, d]",
-    )
-
-    quantity: int = Field(
-        ...,
-        ge=1,
-        le=10000,
-    )
+    potion_type: List[int] = Field(min_length=4, max_length=4)
+    quantity: int = Field(gt=0, le=10000)
 
     @field_validator("potion_type")
     @classmethod
-    def validate_potion_type(cls, potion_type: List[int]) -> List[int]:
-        if sum(potion_type) != 100:
-            raise ValueError(
-                "Sum of potion_type values must be exactly 100"
-            )
+    def validate_potion_type(cls, value):
+        if sum(value) != 100:
+            raise ValueError("Potion percentages must add up to 100")
+        return value
 
-        return potion_type
+
+
+def get_balance(connection, account_name):
+    result = connection.execute(
+        sqlalchemy.text("""
+            SELECT COALESCE(SUM(le.change), 0)
+            FROM accounts a
+            LEFT JOIN account_ledger_entries le
+                ON le.account_id = a.id
+            WHERE a.name = :name
+        """),
+        {"name": account_name},
+    )
+
+    return int(result.scalar_one())
+
+
+def get_account_id(connection, account_name):
+    result = connection.execute(
+        sqlalchemy.text("""
+            SELECT id
+            FROM accounts
+            WHERE name = :name
+            FOR UPDATE
+        """),
+        {"name": account_name},
+    )
+
+    account_id = result.scalar_one_or_none()
+
+    if account_id is None:
+        raise ValueError(
+            f"Ledger account '{account_name}' does not exist"
+        )
+
+    return account_id
+
+
+def add_ledger_entry(
+    connection,
+    account_name,
+    amount,
+    transaction_id,
+):
+    account_id = get_account_id(connection, account_name)
+
+    connection.execute(
+        sqlalchemy.text("""
+            INSERT INTO account_ledger_entries (
+                account_id,
+                account_transaction_id,
+                change
+            )
+            VALUES (
+                :account_id,
+                :transaction_id,
+                :amount
+            )
+        """),
+        {
+            "account_id": account_id,
+            "transaction_id": transaction_id,
+            "amount": amount,
+        },
+    )
 
 
 @router.post(
     "/deliver/{order_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def post_deliver_bottles(
-    potions_delivered: List[PotionMixes],
+def deliver_potions(
     order_id: str,
+    potions: List[PotionMixes],
 ):
-    """
-    Record a bottling delivery.
-
-    Every delivery updates all inventory/accounting systems
-    inside ONE database transaction:
-
-    1. global_inventory ML
-    2. potions.quantity
-    3. accounts / account_ledger_entries
-    4. account_transactions
-    5. processed_requests
-
-    If anything fails, the entire transaction rolls back.
-
-    Sending the same order_id twice does not apply it twice.
-    """
-
     with db.engine.begin() as connection:
 
-        existing = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT order_id
+        already_processed = connection.execute(
+            sqlalchemy.text("""
+                SELECT 1
                 FROM processed_requests
                 WHERE order_id = :order_id
-                """
-            ),
-            {
-                "order_id": str(order_id),
-            },
+            """),
+            {"order_id": order_id},
         ).first()
 
-        if existing is not None:
+        if already_processed:
             return
         transaction_id = connection.execute(
-            sqlalchemy.text(
-                """
+            sqlalchemy.text("""
                 INSERT INTO account_transactions (description)
                 VALUES (:description)
                 RETURNING id
-                """
-            ),
+            """),
             {
-                "description": f"Bottling delivery {order_id}",
+                "description": f"Bottler delivery {order_id}"
             },
         ).scalar_one()
 
 
-        total_red_used = 0
-        total_green_used = 0
-        total_blue_used = 0
+        red_used = 0
+        green_used = 0
+        blue_used = 0
 
-        # Store the resolved potion rows so we don't have to
-        # query them again later.
-        resolved_potions = []
+        delivered = []
 
-        for potion in potions_delivered:
+        for item in potions:
 
-            red, green, blue = potion.potion_type[:3]
+            recipe = connection.execute(
+                sqlalchemy.text("""
+                    SELECT red, green, blue
+                    FROM potions
+                    WHERE sku = :sku
+                """),
+                {
+                    "sku": item.potion_type
+                },
+            ).first()
+            red = item.potion_type[0]
+            green = item.potion_type[1]
+            blue = item.potion_type[2]
 
-            potion_row = connection.execute(
-                sqlalchemy.text(
-                    """
-                    SELECT potion_id, sku, quantity
+            red_used += red * item.quantity
+            green_used += green * item.quantity
+            blue_used += blue * item.quantity
+
+            delivered.append(item)
+
+        red_used = red_used // 100
+        green_used = green_used // 100
+        blue_used = blue_used // 100
+
+        if get_balance(connection, "Red ML") < red_used:
+            raise ValueError("Not enough Red ML")
+
+        if get_balance(connection, "Green ML") < green_used:
+            raise ValueError("Not enough Green ML")
+
+        if get_balance(connection, "Blue ML") < blue_used:
+            raise ValueError("Not enough Blue ML")
+
+        current_potions = connection.execute(
+            sqlalchemy.text("""
+                SELECT COALESCE(SUM(le.change), 0)
+                FROM accounts a
+                LEFT JOIN account_ledger_entries le
+                    ON le.account_id = a.id
+                WHERE a.name LIKE 'POTION:%'
+            """)
+        ).scalar_one()
+
+        new_potions = sum(
+            item.quantity
+            for item in delivered
+        )
+
+        if current_potions + new_potions > 50:
+            raise ValueError(
+                "Not enough potion capacity"
+            )
+        if red_used:
+            add_ledger_entry(
+                connection,
+                "Red ML",
+                -red_used,
+                transaction_id,
+            )
+
+        if green_used:
+            add_ledger_entry(
+                connection,
+                "Green ML",
+                -green_used,
+                transaction_id,
+            )
+
+        if blue_used:
+            add_ledger_entry(
+                connection,
+                "Blue ML",
+                -blue_used,
+                transaction_id,
+            )
+
+        for item in delivered:
+
+            # Find the matching recipe SKU.
+            recipe = connection.execute(
+                sqlalchemy.text("""
+                    SELECT sku
                     FROM potions
                     WHERE red = :red
                       AND green = :green
                       AND blue = :blue
-                    """
-                ),
+                    LIMIT 1
+                """),
                 {
-                    "red": red,
-                    "green": green,
-                    "blue": blue,
+                    "red": item.potion_type[0],
+                    "green": item.potion_type[1],
+                    "blue": item.potion_type[2],
                 },
-            ).mappings().first()
+            ).first()
 
-            if potion_row is None:
+            if recipe is None:
                 raise ValueError(
-                    f"No potion recipe found for "
-                    f"red={red}, green={green}, blue={blue}"
+                    f"No potion recipe matches {item.potion_type}"
                 )
 
-            red_ml_used = potion.quantity * red
-            green_ml_used = potion.quantity * green
-            blue_ml_used = potion.quantity * blue
+            sku = recipe.sku
 
-            total_red_used += red_ml_used
-            total_green_used += green_ml_used
-            total_blue_used += blue_ml_used
+            add_ledger_entry(
+                connection,
+                f"POTION:{sku}",
+                item.quantity,
+                transaction_id,
+            )
 
-            resolved_potions.append(
+        connection.execute(
+            sqlalchemy.text("""
+                INSERT INTO processed_requests (order_id)
+                VALUES (:order_id)
+            """),
+            {
+                "order_id": order_id
+            },
+        )
+
+def create_bottle_plan(
+    red_ml,
+    green_ml,
+    blue_ml,
+    potion_capacity,
+):
+    plan = []
+    recipes = [
+        {
+            "sku": "RED_POTION_0",
+            "red": 100,
+            "green": 0,
+            "blue": 0,
+        },
+        {
+            "sku": "GREEN_POTION_0",
+            "red": 0,
+            "green": 100,
+            "blue": 0,
+        },
+        {
+            "sku": "BLUE_POTION_0",
+            "red": 0,
+            "green": 0,
+            "blue": 100,
+        },
+        {
+            "sku": "PURPLE_POTION_0",
+            "red": 50,
+            "green": 0,
+            "blue": 50,
+        },
+        {
+            "sku": "BROWN_POTION_0",
+            "red": 50,
+            "green": 50,
+            "blue": 0,
+        },
+        {
+            "sku": "BLACK_POTION_0",
+            "red": 33,
+            "green": 33,
+            "blue": 34,
+        },
+    ]
+
+    for recipe in recipes:
+
+        red_needed = recipe["red"]
+        green_needed = recipe["green"]
+        blue_needed = recipe["blue"]
+
+        possible = potion_capacity
+
+        if red_needed:
+            possible = min(
+                possible,
+                red_ml // red_needed,
+            )
+
+        if green_needed:
+            possible = min(
+                possible,
+                green_ml // green_needed,
+            )
+
+        if blue_needed:
+            possible = min(
+                possible,
+                blue_ml // blue_needed,
+            )
+
+        if possible > 0:
+            plan.append(
                 {
-                    "potion": potion,
-                    "potion_row": potion_row,
-                    "red": red,
-                    "green": green,
-                    "blue": blue,
-                    "red_ml_used": red_ml_used,
-                    "green_ml_used": green_ml_used,
-                    "blue_ml_used": blue_ml_used,
+                    "sku": recipe["sku"],
+                    "quantity": int(possible),
                 }
             )
 
-
-        inventory = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT red_ml, green_ml, blue_ml
-                FROM global_inventory
-                FOR UPDATE
-                """
-            )
-        ).mappings().one()
-
-        if inventory["red_ml"] < total_red_used:
-            raise ValueError(
-                f"Not enough red ML. "
-                f"Required={total_red_used}, "
-                f"Available={inventory['red_ml']}"
-            )
-
-        if inventory["green_ml"] < total_green_used:
-            raise ValueError(
-                f"Not enough green ML. "
-                f"Required={total_green_used}, "
-                f"Available={inventory['green_ml']}"
-            )
-
-        if inventory["blue_ml"] < total_blue_used:
-            raise ValueError(
-                f"Not enough blue ML. "
-                f"Required={total_blue_used}, "
-                f"Available={inventory['blue_ml']}"
-            )
-        current_potions = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT COALESCE(SUM(quantity), 0)
-                FROM potions
-                """
-            )
-        ).scalar_one()
-
-        total_potions_to_add = sum(
-            item["potion"].quantity
-            for item in resolved_potions
-        )
-
-        if current_potions + total_potions_to_add > 50:
-            raise ValueError(
-                f"Potion capacity exceeded. "
-                f"Current={current_potions}, "
-                f"Adding={total_potions_to_add}, "
-                f"Maximum=50"
-            )
-
-        connection.execute(
-            sqlalchemy.text(
-                """
-                UPDATE global_inventory
-                SET red_ml = red_ml - :red_used,
-                    green_ml = green_ml - :green_used,
-                    blue_ml = blue_ml - :blue_used
-                """
-            ),
-            {
-                "red_used": total_red_used,
-                "green_used": total_green_used,
-                "blue_used": total_blue_used,
-            },
-        )
-
-        for item in resolved_potions:
-
-            potion = item["potion"]
-            potion_row = item["potion_row"]
-
-            sku = potion_row["sku"]
-
-            # -----------------------------------------------------
-            # Update normal potion inventory
-            # -----------------------------------------------------
-
-            result = connection.execute(
-                sqlalchemy.text(
-                    """
-                    UPDATE potions
-                    SET quantity = quantity + :quantity
-                    WHERE potion_id = :potion_id
-                    """
-                ),
-                {
-                    "quantity": potion.quantity,
-                    "potion_id": potion_row["potion_id"],
-                },
-            )
-
-            if result.rowcount != 1:
-                raise ValueError(
-                    f"Could not update potion inventory for {sku}"
-                )
-
-
-            if item["red_ml_used"] > 0:
-
-                red_account = connection.execute(
-                    sqlalchemy.text(
-                        """
-                        SELECT id
-                        FROM accounts
-                        WHERE name = 'Red ML'
-                        """
-                    )
-                ).scalar_one_or_none()
-
-                if red_account is None:
-                    red_account = connection.execute(
-                        sqlalchemy.text(
-                            """
-                            INSERT INTO accounts (name)
-                            VALUES ('Red ML')
-                            RETURNING id
-                            """
-                        )
-                    ).scalar_one()
-
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                        INSERT INTO account_ledger_entries
-                            (
-                                account_id,
-                                account_transaction_id,
-                                change
-                            )
-                        VALUES
-                            (
-                                :account_id,
-                                :transaction_id,
-                                :change
-                            )
-                        """
-                    ),
-                    {
-                        "account_id": red_account,
-                        "transaction_id": transaction_id,
-                        "change": -item["red_ml_used"],
-                    },
-                )
-
-
-            if item["green_ml_used"] > 0:
-
-                green_account = connection.execute(
-                    sqlalchemy.text(
-                        """
-                        SELECT id
-                        FROM accounts
-                        WHERE name = 'Green ML'
-                        """
-                    )
-                ).scalar_one_or_none()
-
-                if green_account is None:
-                    green_account = connection.execute(
-                        sqlalchemy.text(
-                            """
-                            INSERT INTO accounts (name)
-                            VALUES ('Green ML')
-                            RETURNING id
-                            """
-                        )
-                    ).scalar_one()
-
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                        INSERT INTO account_ledger_entries
-                            (
-                                account_id,
-                                account_transaction_id,
-                                change
-                            )
-                        VALUES
-                            (
-                                :account_id,
-                                :transaction_id,
-                                :change
-                            )
-                        """
-                    ),
-                    {
-                        "account_id": green_account,
-                        "transaction_id": transaction_id,
-                        "change": -item["green_ml_used"],
-                    },
-                )
-
-
-            if item["blue_ml_used"] > 0:
-
-                blue_account = connection.execute(
-                    sqlalchemy.text(
-                        """
-                        SELECT id
-                        FROM accounts
-                        WHERE name = 'Blue ML'
-                        """
-                    )
-                ).scalar_one_or_none()
-
-                if blue_account is None:
-                    blue_account = connection.execute(
-                        sqlalchemy.text(
-                            """
-                            INSERT INTO accounts (name)
-                            VALUES ('Blue ML')
-                            RETURNING id
-                            """
-                        )
-                    ).scalar_one()
-
-                connection.execute(
-                    sqlalchemy.text(
-                        """
-                        INSERT INTO account_ledger_entries
-                            (
-                                account_id,
-                                account_transaction_id,
-                                change
-                            )
-                        VALUES
-                            (
-                                :account_id,
-                                :transaction_id,
-                                :change
-                            )
-                        """
-                    ),
-                    {
-                        "account_id": blue_account,
-                        "transaction_id": transaction_id,
-                        "change": -item["blue_ml_used"],
-                    },
-                )
-
-            potion_account = connection.execute(
-                sqlalchemy.text(
-                    """
-                    SELECT id
-                    FROM accounts
-                    WHERE name = :name
-                    """
-                ),
-                {
-                    "name": sku,
-                },
-            ).scalar_one_or_none()
-
-            if potion_account is None:
-                potion_account = connection.execute(
-                    sqlalchemy.text(
-                        """
-                        INSERT INTO accounts (name)
-                        VALUES (:name)
-                        RETURNING id
-                        """
-                    ),
-                    {
-                        "name": sku,
-                    },
-                ).scalar_one()
-
-
-            connection.execute(
-                sqlalchemy.text(
-                    """
-                    INSERT INTO account_ledger_entries
-                        (
-                            account_id,
-                            account_transaction_id,
-                            change
-                        )
-                    VALUES
-                        (
-                            :account_id,
-                            :transaction_id,
-                            :change
-                        )
-                    """
-                ),
-                {
-                    "account_id": potion_account,
-                    "transaction_id": transaction_id,
-                    "change": potion.quantity,
-                },
-            )
-        connection.execute(
-            sqlalchemy.text(
-                """
-                INSERT INTO processed_requests
-                    (
-                        order_id,
-                        response
-                    )
-                VALUES
-                    (
-                        :order_id,
-                        CAST(:response AS JSONB)
-                    )
-                """
-            ),
-            {
-                "order_id": str(order_id),
-                "response": "{}",
-            },
-        )
-
-
-def create_bottle_plan(
-    red_ml: int,
-    green_ml: int,
-    blue_ml: int,
-    maximum_potion_capacity: int,
-) -> List[PotionMixes]:
-
-    with db.engine.begin() as connection:
-
-        potions = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT
-                    red,
-                    green,
-                    blue
-                FROM potions
-                ORDER BY potion_id
-                """
-            )
-        ).mappings().all()
-
-    plan = []
-
-    remaining_capacity = maximum_potion_capacity
-
-    print(
-        f"Maximum potion capacity: "
-        f"{maximum_potion_capacity}"
-    )
-
-    print(f"potions: {potions}")
-
-    for potion in potions:
-
-        print(f"Processing potion: {potion}")
-
-        if remaining_capacity <= 0:
-            break
-
-        possible_amounts = []
-
-
-        if potion["red"] > 0:
-            possible_amounts.append(
-                red_ml // potion["red"]
-            )
-
-        if potion["green"] > 0:
-            possible_amounts.append(
-                green_ml // potion["green"]
-            )
-
-        if potion["blue"] > 0:
-            possible_amounts.append(
-                blue_ml // potion["blue"]
-            )
-
-        if not possible_amounts:
-            continue
-
-        amount_to_make = min(
-            min(possible_amounts),
-            remaining_capacity,
-        )
-
-        if amount_to_make <= 0:
-            continue
-
-        plan.append(
-            PotionMixes(
-                potion_type=[
-                    potion["red"],
-                    potion["green"],
-                    potion["blue"],
-                    0,
-                ],
-                quantity=amount_to_make,
-            )
-        )
-
-        red_ml -= amount_to_make * potion["red"]
-        green_ml -= amount_to_make * potion["green"]
-        blue_ml -= amount_to_make * potion["blue"]
-
-        remaining_capacity -= amount_to_make
-
-    print(f"bottle plan {plan}")
-
     return plan
 
-
-@router.post(
-    "/plan",
-    response_model=List[PotionMixes],
-)
-def get_bottle_plan():
-    """
-    Generate a bottling plan using global ML inventory.
-
-    Potion capacity is based on the quantities currently
-    stored in the potions table.
-    """
+@router.get("/plan")
+def bottle_plan():
 
     with db.engine.begin() as connection:
 
-        inventory = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT
-                    red_ml,
-                    green_ml,
-                    blue_ml
-                FROM global_inventory
-                """
-            )
-        ).mappings().one()
+
+        red_ml = get_balance(
+            connection,
+            "Red ML",
+        )
+
+        green_ml = get_balance(
+            connection,
+            "Green ML",
+        )
+
+        blue_ml = get_balance(
+            connection,
+            "Blue ML",
+        )
 
         current_potions = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT COALESCE(SUM(quantity), 0)
-                FROM potions
-                """
-            )
+            sqlalchemy.text("""
+                SELECT COALESCE(SUM(le.change), 0)
+                FROM accounts a
+                LEFT JOIN account_ledger_entries le
+                    ON le.account_id = a.id
+                WHERE a.name LIKE 'POTION:%'
+            """)
         ).scalar_one()
+        potion_capacity = max(
+            0,
+            50 - int(current_potions)
+        )
 
-    remaining_capacity = max(
-        0,
-        50 - current_potions,
-    )
-
-    return create_bottle_plan(
-        red_ml=inventory["red_ml"],
-        green_ml=inventory["green_ml"],
-        blue_ml=inventory["blue_ml"],
-        maximum_potion_capacity=remaining_capacity,
-    )
-
-
-if __name__ == "__main__":
-    print(get_bottle_plan())
+        return create_bottle_plan(
+            red_ml=int(red_ml),
+            green_ml=int(green_ml),
+            blue_ml=int(blue_ml),
+            potion_capacity=potion_capacity,
+        )
