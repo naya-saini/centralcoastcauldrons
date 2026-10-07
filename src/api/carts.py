@@ -136,7 +136,6 @@ def checkout(cart_id: int, cart_checkout: CartCheckout):
     """
     Handles the checkout process for a specific cart.
     """
-
     if cart_id not in carts:
         raise HTTPException(status_code=404, detail="Cart not found")
 
@@ -144,49 +143,41 @@ def checkout(cart_id: int, cart_checkout: CartCheckout):
     total_gold_paid = total_potions_bought * 50  # Assuming each potion costs 50 gold
 
     with db.engine.begin() as connection:
-        row = connection.execute(
+        tx_id = connection.execute(
             sqlalchemy.text(
-                """
-                SELECT gold FROM global_inventory
-                """
-            )
-        ).one()
+                "INSERT INTO transactions (description) VALUES (:d) RETURNING id"
+            ),
+            {"d": f"checkout cart {cart_id}"},
+        ).scalar_one()
 
-        gold = row.gold
-        gold += total_gold_paid
+        for item_sku, quantity in carts[cart_id].items():
+            item = sku_to_item(item_sku)
+
+            have = connection.execute(
+                sqlalchemy.text(
+                    "SELECT COALESCE(SUM(change), 0) FROM ledger_entries WHERE item = :item"
+                ),
+                {"item": item},
+            ).scalar_one()
+            if have < quantity:
+                raise HTTPException(status_code=400, detail=f"Not enough {item}")
+
+            connection.execute(
+                sqlalchemy.text(
+                    """
+                    INSERT INTO ledger_entries (transaction_id, item, change)
+                    VALUES (:tx, :item, :change)
+                    """
+                ),
+                {"tx": tx_id, "item": item, "change": -quantity},
+            )
 
         connection.execute(
-            sqlalchemy.text(
-                """
-                UPDATE global_inventory SET 
-                gold = :total_gold
-                """
-            ),
-            [{"total_gold": gold}],
+            sqlalchemy.text("UPDATE global_inventory SET gold = gold + :paid"),
+            {"paid": total_gold_paid},
         )
-    # TODO: Deduct the right potions from inventory to the shop
-for item_sku, quantity in carts[cart_id].items():
-    item = sku_to_item(item_sku)
-
-    have = connection.execute(
-        sqlalchemy.text(
-            "SELECT COALESCE(SUM(change), 0) FROM ledger_entries WHERE item = :item"
-        ),
-        {"item": item},
-    ).scalar_one()
-    if have < quantity:
-        raise HTTPException(status_code=400, detail=f"Not enough {item}")
-
-    connection.execute(
-        sqlalchemy.text(
-            """
-            INSERT INTO ledger_entries (transaction_id, item, change)
-            VALUES (:tx, :item, :change)
-            """
-        ),
-        {"tx": tx_id, "item": item, "change": -quantity},
-    )
 
     return CheckoutResponse(
-        total_potions_bought=total_potions_bought, total_gold_paid=total_gold_paid
+        total_potions_bought=total_potions_bought,
+        total_gold_paid=total_gold_paid,
     )
