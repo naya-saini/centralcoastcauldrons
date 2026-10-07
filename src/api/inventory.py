@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 import sqlalchemy
-
 from src.api import auth
 from src import database as db
 
@@ -23,106 +22,48 @@ class CapacityPlan(BaseModel):
     potion_capacity: int = Field(
         ge=0,
         le=10,
-        description="Potion capacity units, max 10",
+        description="Potion capacity units, max 10"
     )
     ml_capacity: int = Field(
         ge=0,
         le=10,
-        description="ML capacity units, max 10",
+        description="ML capacity units, max 10"
     )
-
-
-def get_ledger_balance(connection, account_name: str) -> int:
-    """
-    Returns the current balance of an account.
-
-    Balance is calculated from all ledger entries:
-        SUM(account_ledger_entries.change)
-    """
-
-    balance = connection.execute(
-        sqlalchemy.text(
-            """
-            SELECT
-                COALESCE(SUM(le.change), 0)
-            FROM accounts a
-            LEFT JOIN account_ledger_entries le
-                ON le.account_id = a.id
-            WHERE a.name = :account_name
-            """
-        ),
-        {
-            "account_name": account_name,
-        },
-    ).scalar_one()
-
-    return int(balance)
 
 
 @router.get("/audit", response_model=InventoryAudit)
 def get_inventory():
     """
-    Returns the current inventory from the ledger.
+    Returns the current inventory.
 
     number_of_potions = total finished potions
     ml_in_barrels = total raw potion ingredients
     gold = current gold
-
-    The ledger is the source of truth.
     """
 
-    with db.engine.begin() as connection:
+    with db.engine.connect() as connection:
+        rows = connection.execute(
+            sqlalchemy.text("SELECT item, balance FROM inventory_balances")
+        ).all()
 
-        gold = get_ledger_balance(
-            connection,
-            "Gold",
-        )
+    balances = {r.item: r.balance for r in rows}
 
-        red_ml = get_ledger_balance(
-            connection,
-            "Red ML",
-        )
+    ml_in_barrels = sum(
+        balance for item, balance in balances.items() if item.endswith("_ml")
+    )
 
-        green_ml = get_ledger_balance(
-            connection,
-            "Green ML",
-        )
-
-        blue_ml = get_ledger_balance(
-            connection,
-            "Blue ML",
-        )
-        potion_result = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT
-                    COALESCE(SUM(le.change), 0)
-                FROM accounts a
-                LEFT JOIN account_ledger_entries le
-                    ON le.account_id = a.id
-                WHERE a.name LIKE 'POTION:%'
-                """
-            )
-        ).scalar_one()
-
-        number_of_potions = int(potion_result)
-    ml_in_barrels = (
-        red_ml
-        + green_ml
-        + blue_ml
+    number_of_potions = sum(
+        balance for item, balance in balances.items() if item.startswith("potion:")
     )
 
     return InventoryAudit(
         number_of_potions=number_of_potions,
         ml_in_barrels=ml_in_barrels,
-        gold=gold,
+        gold=balances.get("gold", 0),
     )
 
 
-@router.post(
-    "/plan",
-    response_model=CapacityPlan,
-)
+@router.post("/plan", response_model=CapacityPlan)
 def get_capacity_plan():
     """
     Provides a daily capacity purchase plan.
@@ -133,25 +74,21 @@ def get_capacity_plan():
     """
 
     return CapacityPlan(
-        potion_capacity=0,
-        ml_capacity=0,
+        potion_capacity=2,
+        ml_capacity=2,
     )
 
 
 @router.post(
     "/deliver/{order_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT
 )
 def deliver_capacity_plan(
     capacity_purchase: CapacityPlan,
-    order_id: str,
+    order_id: int
 ):
     """
     Processes the delivery of the planned capacity purchase.
-
-    Capacity purchasing is not currently represented as an
-    inventory account in the ledger, so there is no inventory
-    balance to update here yet.
     """
 
     print(
@@ -159,4 +96,51 @@ def deliver_capacity_plan(
         f"order_id: {order_id}"
     )
 
-    pass
+    gold_cost = 1000 * (
+        capacity_purchase.potion_capacity + capacity_purchase.ml_capacity
+    )
+
+    changes = {
+        "gold": -gold_cost,
+        "potion_capacity": capacity_purchase.potion_capacity,
+        "ml_capacity": capacity_purchase.ml_capacity,
+    }
+
+    with db.engine.begin() as connection:
+        result = connection.execute(
+            sqlalchemy.text(
+                """
+                INSERT INTO processed_requests (endpoint, order_id)
+                VALUES ('capacity_deliver', :order_id)
+                ON CONFLICT (endpoint, order_id) DO NOTHING
+                """
+            ),
+            {"order_id": order_id},
+        )
+        if result.rowcount == 0:
+            return
+
+        tx_id = connection.execute(
+            sqlalchemy.text(
+                """
+                INSERT INTO inventory_transactions (description)
+                VALUES (:description)
+                RETURNING id
+                """
+            ),
+            {"description": f"capacity delivery order {order_id}"},
+        ).scalar_one()
+
+        connection.execute(
+            sqlalchemy.text(
+                """
+                INSERT INTO ledger_entries (transaction_id, item, change)
+                VALUES (:tx, :item, :change)
+                """
+            ),
+            [
+                {"tx": tx_id, "item": item, "change": change}
+                for item, change in changes.items()
+                if change != 0
+            ],
+        )
