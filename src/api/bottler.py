@@ -14,6 +14,7 @@ router = APIRouter(
 
 ml_colors = ["red", "green", "blue", "dark"]
 
+
 class PotionMixes(BaseModel):
     potion_type: List[int] = Field(
         ...,
@@ -32,32 +33,34 @@ class PotionMixes(BaseModel):
             raise ValueError("Sum of potion_type values must be exactly 100")
         return potion_type
 
-def potion_item(potion_type: List[int]) -> str:
-    """Ledger item name for a potion. Pure colors get 'potion:red' etc.,
-    which is what the barrels plan reads. Mixes get 'potion:r_g_b_d'."""
-    for i, color in enumerate(ml_colors[:3]):
-        if potion_type[i] == 100:
-            return f"potion:{color}"
-    return "potion:" + "_".join(str(x) for x in potion_type)
+
+def get_or_create_potion_sku(connection, potion_type: List[int]) -> str:
+    """Find the potions row for this mix, creating it if it's a new recipe."""
+    r, g, b, d = potion_type
+    connection.execute(
+        sqlalchemy.text(
+            """
+            INSERT INTO potions (sku, name, red, green, blue, dark)
+            VALUES (:sku, :sku, :r, :g, :b, :d)
+            ON CONFLICT (red, green, blue, dark) DO NOTHING
+            """
+        ),
+        {"sku": f"potion_{r}_{g}_{b}_{d}", "r": r, "g": g, "b": b, "d": d},
+    )
+    return connection.execute(
+        sqlalchemy.text(
+            "SELECT sku FROM potions WHERE red=:r AND green=:g AND blue=:b AND dark=:d"
+        ),
+        {"r": r, "g": g, "b": b, "d": d},
+    ).scalar_one()
+
 
 @router.post("/deliver/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 def post_deliver_bottles(potions_delivered: List[PotionMixes], order_id: int):
     """
-    Delivery of potions requested after plan. order_id is a unique value representing
-    a single delivery; the call is idempotent based on the order_id.
+    Delivery of potions requested after plan. Idempotent on order_id.
     """
     print(f"potions delivered: {potions_delivered} order_id: {order_id}")
-
-    changes = {}
-    for mix in potions_delivered:
-        for i, pct in enumerate(mix.potion_type):
-            if pct == 0:
-                continue
-            key = f"{ml_colors[i]}_ml"
-            changes[key] = changes.get(key, 0) - pct * mix.quantity
-
-        item = potion_item(mix.potion_type)
-        changes[item] = changes.get(item, 0) + mix.quantity
 
     with db.engine.begin() as connection:
         result = connection.execute(
@@ -72,6 +75,17 @@ def post_deliver_bottles(potions_delivered: List[PotionMixes], order_id: int):
         )
         if result.rowcount == 0:
             return  # already processed
+
+        # ml used goes down, potions made go up
+        changes = {}
+        for mix in potions_delivered:
+            for i, pct in enumerate(mix.potion_type):
+                if pct:
+                    key = f"{ml_colors[i]}_ml"
+                    changes[key] = changes.get(key, 0) - pct * mix.quantity
+            sku = get_or_create_potion_sku(connection, mix.potion_type)
+            item = f"potion:{sku}"
+            changes[item] = changes.get(item, 0) + mix.quantity
 
         tx_id = connection.execute(
             sqlalchemy.text(
@@ -106,44 +120,56 @@ def create_bottle_plan(
     dark_ml: int,
     maximum_potion_capacity: int,
     current_potion_inventory: List[PotionMixes],
+    recipes: List[List[int]] = None,
 ) -> List[PotionMixes]:
-    plan = []
+    ml = [red_ml, green_ml, blue_ml, dark_ml]
+    room = maximum_potion_capacity - sum(p.quantity for p in current_potion_inventory)
+    made = {}
 
-    for potion_type, ml in (
-        ([100, 0, 0, 0], red_ml),
-        ([0, 100, 0, 0], green_ml),
-        ([0, 0, 100, 0], blue_ml),
-    ):
-        quantity = ml // 100
-        if quantity >= 1:
-            plan.append(PotionMixes(potion_type=potion_type, quantity=min(quantity, 10000)))
+    # round-robin over every recipe in the potions table so none hogs the ml
+    progress = True
+    while room > 0 and progress:
+        progress = False
+        for recipe in recipes or []:
+            if room > 0 and all(ml[i] >= recipe[i] for i in range(4)):
+                for i in range(4):
+                    ml[i] -= recipe[i]
+                made[tuple(recipe)] = made.get(tuple(recipe), 0) + 1
+                room -= 1
+                progress = True
 
-    return plan
-
+    return [PotionMixes(potion_type=list(k), quantity=v) for k, v in made.items()]
 
 
 @router.post("/plan", response_model=List[PotionMixes])
 def get_bottle_plan():
     """
-    Gets the plan for bottling potions.
-    Each bottle has a quantity of what proportion of red, green, blue, and dark potions to add.
-    Colors are expressed in integers from 0 to 100 that must sum up to exactly 100.
+    Read-only: no database writes.
     """
     with db.engine.connect() as connection:
-        rows = connection.execute(
-            sqlalchemy.text("SELECT item, balance FROM inventory_balances")
+        balances = {
+            r.item: r.balance
+            for r in connection.execute(
+                sqlalchemy.text("SELECT item, balance FROM inventory_balances")
+            ).all()
+        }
+        potions = connection.execute(
+            sqlalchemy.text(
+                "SELECT red, green, blue, dark, stock FROM potion_inventory WHERE active"
+            )
         ).all()
-    balances = {r.item: r.balance for r in rows}
 
+    stocked = [
+        PotionMixes(potion_type=[p.red, p.green, p.blue, p.dark], quantity=p.stock)
+        for p in potions
+        if p.stock > 0
+    ]
     return create_bottle_plan(
         red_ml=balances.get("red_ml", 0),
         green_ml=balances.get("green_ml", 0),
         blue_ml=balances.get("blue_ml", 0),
         dark_ml=balances.get("dark_ml", 0),
         maximum_potion_capacity=50,
-        current_potion_inventory=[],
+        current_potion_inventory=stocked,
+        recipes=[[p.red, p.green, p.blue, p.dark] for p in potions],
     )
-
-
-if __name__ == "__main__":
-    print(get_bottle_plan())

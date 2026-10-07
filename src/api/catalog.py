@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import List, Annotated
 import sqlalchemy
-from src  import database as db
+from src import database as db
 
 router = APIRouter()
 
@@ -20,22 +20,23 @@ class CatalogItem(BaseModel):
     )
 
 
-# Placeholder function, you will replace this with a database call
 def create_catalog() -> List[CatalogItem]:
-    with db.engine.begin() as connection:
+    with db.engine.connect() as connection:
         rows = connection.execute(
             sqlalchemy.text(
                 """
                 SELECT
                     sku,
                     name,
-                    quantity,
+                    stock,
                     price,
                     red,
                     green,
-                    blue
-                FROM potions
-                WHERE quantity > 0
+                    blue,
+                    dark
+                FROM potion_inventory
+                WHERE active AND stock > 0
+                ORDER BY stock DESC
                 LIMIT 6
                 """
             )
@@ -48,13 +49,13 @@ def create_catalog() -> List[CatalogItem]:
             CatalogItem(
                 sku=potion["sku"],
                 name=potion["name"],
-                quantity=potion["quantity"],
+                quantity=potion["stock"],
                 price=potion["price"],
                 potion_type=[
                     potion["red"],
                     potion["green"],
                     potion["blue"],
-                    0,
+                    potion["dark"],
                 ],
             )
         )

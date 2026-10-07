@@ -56,8 +56,7 @@ def calculate_barrel_summary(barrels: List[Barrel]) -> BarrelSummary:
 @router.post("/deliver/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 def post_deliver_barrels(barrels_delivered: List[Barrel], order_id: int):
     """
-    Processes barrels delivered based on the provided order_id. order_id is a unique value representing
-    a single delivery; the call is idempotent based on the order_id.
+    Records a barrel delivery in the ledger. Idempotent on order_id.
     """
     print(f"barrels delivered: {barrels_delivered} order_id: {order_id}")
 
@@ -74,7 +73,6 @@ def post_deliver_barrels(barrels_delivered: List[Barrel], order_id: int):
             )
 
     with db.engine.begin() as connection:
-        # idempotency: claim this order_id
         result = connection.execute(
             sqlalchemy.text(
                 """
@@ -131,14 +129,13 @@ def create_barrel_plan(
     current_potions = current_potions or {}
 
     # randomly pick red, green, or blue
-    color = random.choice(["red", "green", "blue"])
+    color = random.choice(ml_colors[:3])
     color_index = ml_colors.index(color)
 
     # need fewer than 5 potions of that color
     if current_potions.get(color, 0) >= 5:
         return []
 
-    # small barrel of that color
     small_barrel = next(
         (
             b
@@ -148,7 +145,6 @@ def create_barrel_plan(
         None,
     )
 
-    # need to afford it
     if small_barrel and small_barrel.price <= gold:
         return [BarrelOrder(sku=small_barrel.sku, quantity=1)]
 
@@ -158,7 +154,7 @@ def create_barrel_plan(
 @router.post("/plan", response_model=List[BarrelOrder])
 def get_wholesale_purchase_plan(wholesale_catalog: List[Barrel]):
     """
-    Gets the plan for purchasing wholesale barrels. Read-only: no database writes.
+    Read-only: no database writes.
     """
     print(f"barrel catalog: {wholesale_catalog}")
 
@@ -166,7 +162,18 @@ def get_wholesale_purchase_plan(wholesale_catalog: List[Barrel]):
         rows = connection.execute(
             sqlalchemy.text("SELECT item, balance FROM inventory_balances")
         ).all()
+        potions = connection.execute(
+            sqlalchemy.text("SELECT red, green, blue, dark, stock FROM potion_inventory")
+        ).all()
     balances = {r.item: r.balance for r in rows}
+
+    # each potion counts toward its dominant color (dark-dominant ones are skipped)
+    potion_counts = {c: 0 for c in ml_colors[:3]}
+    for p in potions:
+        mix = [p.red, p.green, p.blue, p.dark]
+        idx = mix.index(max(mix))
+        if idx < 3:
+            potion_counts[ml_colors[idx]] += p.stock
 
     return create_barrel_plan(
         gold=balances.get("gold", 0),
@@ -176,9 +183,5 @@ def get_wholesale_purchase_plan(wholesale_catalog: List[Barrel]):
         current_blue_ml=balances.get("blue_ml", 0),
         current_dark_ml=balances.get("dark_ml", 0),
         wholesale_catalog=wholesale_catalog,
-        current_potions={
-            "red": balances.get("potion:red", 0),
-            "green": balances.get("potion:green", 0),
-            "blue": balances.get("potion:blue", 0),
-        },
+        current_potions=potion_counts,
     )
