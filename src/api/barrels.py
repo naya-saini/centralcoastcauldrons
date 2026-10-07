@@ -128,11 +128,9 @@ def create_barrel_plan(
     )
     current_potions = current_potions or {}
 
-    # randomly pick red, green, or blue
-    color = random.choice(ml_colors[:3])
+    color = random.choice(ml_colors)
     color_index = ml_colors.index(color)
 
-    # need fewer than 5 potions of that color
     if current_potions.get(color, 0) >= 5:
         return []
 
@@ -167,13 +165,10 @@ def get_wholesale_purchase_plan(wholesale_catalog: List[Barrel]):
         ).all()
     balances = {r.item: r.balance for r in rows}
 
-    # each potion counts toward its dominant color (dark-dominant ones are skipped)
-    potion_counts = {c: 0 for c in ml_colors[:3]}
+    potion_counts = {c: 0 for c in ml_colors}
     for p in potions:
         mix = [p.red, p.green, p.blue, p.dark]
-        idx = mix.index(max(mix))
-        if idx < 3:
-            potion_counts[ml_colors[idx]] += p.stock
+        potion_counts[ml_colors[mix.index(max(mix))]] += p.stock
 
     return create_barrel_plan(
         gold=balances.get("gold", 0),
