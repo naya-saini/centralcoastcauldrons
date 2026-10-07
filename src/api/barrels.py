@@ -3,16 +3,18 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 from typing import List
 
+import random
 import sqlalchemy
 from src.api import auth
 from src import database as db
-
 
 router = APIRouter(
     prefix="/barrels",
     tags=["barrels"],
     dependencies=[Depends(auth.get_api_key)],
 )
+
+ml_colors = ["red", "green", "blue", "dark"]
 
 
 class Barrel(BaseModel):
@@ -31,15 +33,9 @@ class Barrel(BaseModel):
     @classmethod
     def validate_potion_type(cls, potion_type: List[float]) -> List[float]:
         if len(potion_type) != 4:
-            raise ValueError(
-                "potion_type must have exactly 4 elements: [r, g, b, d]"
-            )
-
+            raise ValueError("potion_type must have exactly 4 elements: [r, g, b, d]")
         if not abs(sum(potion_type) - 1.0) < 1e-6:
-            raise ValueError(
-                "Sum of potion_type values must be exactly 1.0"
-            )
-
+            raise ValueError("Sum of potion_type values must be exactly 1.0")
         return potion_type
 
 
@@ -54,174 +50,68 @@ class BarrelSummary:
 
 
 def calculate_barrel_summary(barrels: List[Barrel]) -> BarrelSummary:
-    return BarrelSummary(
-        gold_paid=sum(b.price * b.quantity for b in barrels)
-    )
+    return BarrelSummary(gold_paid=sum(b.price * b.quantity for b in barrels))
 
 
-def get_ledger_balance(connection, account_name: str) -> int:
+@router.post("/deliver/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
+def post_deliver_barrels(barrels_delivered: List[Barrel], order_id: int):
     """
-    Gets the current balance of an account from the ledger.
-
-    Balance = SUM(all ledger changes for that account)
+    Processes barrels delivered based on the provided order_id. order_id is a unique value representing
+    a single delivery; the call is idempotent based on the order_id.
     """
-
-    result = connection.execute(
-        sqlalchemy.text(
-            """
-            SELECT
-                COALESCE(SUM(le.change), 0) AS balance
-            FROM accounts a
-            LEFT JOIN account_ledger_entries le
-                ON le.account_id = a.account_id
-            WHERE a.name = :account_name
-            """
-        ),
-        {"account_name": account_name},
-    ).scalar_one()
-
-    return int(result)
-
-
-def add_ledger_entry(
-    connection,
-    account_name: str,
-    change: int,
-    transaction_id,
-):
-    """
-    Adds a change to an account's ledger balance.
-    """
-
-    connection.execute(
-        sqlalchemy.text(
-            """
-            INSERT INTO account_ledger_entries
-                (account_id, transaction_id, change)
-            SELECT
-                a.account_id,
-                :transaction_id,
-                :change
-            FROM accounts a
-            WHERE a.name = :account_name
-            """
-        ),
-        {
-            "account_name": account_name,
-            "change": change,
-            "transaction_id": transaction_id,
-        },
-    )
-
-
-@router.post(
-    "/deliver/{order_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-def post_deliver_barrels(
-    barrels_delivered: List[Barrel],
-    order_id: int,
-):
-    """
-    Processes barrels delivered based on the provided order_id.
-
-    Gold is deducted from the Gold ledger account.
-
-    Red/Green/Blue ML is added to the corresponding
-    ledger accounts.
-
-    The ledger is the source of truth.
-    """
-
-    print(
-        f"barrels delivered: {barrels_delivered} "
-        f"order_id: {order_id}"
-    )
+    print(f"barrels delivered: {barrels_delivered} order_id: {order_id}")
 
     delivery = calculate_barrel_summary(barrels_delivered)
 
-    red_ml = 0
-    green_ml = 0
-    blue_ml = 0
-
+    changes = {"gold": -delivery.gold_paid}
     for barrel in barrels_delivered:
-
-        if barrel.potion_type == [1, 0, 0, 0]:
-            red_ml += (
-                barrel.ml_per_barrel * barrel.quantity
-            )
-
-        elif barrel.potion_type == [0, 1, 0, 0]:
-            green_ml += (
-                barrel.ml_per_barrel * barrel.quantity
-            )
-
-        elif barrel.potion_type == [0, 0, 1, 0]:
-            blue_ml += (
-                barrel.ml_per_barrel * barrel.quantity
+        for i, fraction in enumerate(barrel.potion_type):
+            if fraction == 0:
+                continue
+            key = f"{ml_colors[i]}_ml"
+            changes[key] = changes.get(key, 0) + int(
+                barrel.ml_per_barrel * fraction * barrel.quantity
             )
 
     with db.engine.begin() as connection:
-
-        current_gold = get_ledger_balance(
-            connection,
-            "Gold",
-        )
-
-        if current_gold < delivery.gold_paid:
-            raise ValueError(
-                f"Not enough gold. "
-                f"Current gold: {current_gold}, "
-                f"required: {delivery.gold_paid}"
-            )
-
-        transaction_id = connection.execute(
+        # idempotency: claim this order_id
+        result = connection.execute(
             sqlalchemy.text(
                 """
-                INSERT INTO account_transactions
-                    (description)
-                VALUES
-                    (:description)
-                RETURNING transaction_id
+                INSERT INTO processed_requests (endpoint, order_id)
+                VALUES ('barrels_deliver', :order_id)
+                ON CONFLICT (endpoint, order_id) DO NOTHING
                 """
             ),
-            {
-                "description": f"Barrel delivery {order_id}"
-            },
+            {"order_id": order_id},
+        )
+        if result.rowcount == 0:
+            return  # already processed
+
+        tx_id = connection.execute(
+            sqlalchemy.text(
+                """
+                INSERT INTO inventory_transactions (description)
+                VALUES (:description)
+                RETURNING id
+                """
+            ),
+            {"description": f"barrel delivery order {order_id}"},
         ).scalar_one()
 
-        add_ledger_entry(
-            connection,
-            "Gold",
-            -delivery.gold_paid,
-            transaction_id,
+        connection.execute(
+            sqlalchemy.text(
+                """
+                INSERT INTO ledger_entries (transaction_id, item, change)
+                VALUES (:tx, :item, :change)
+                """
+            ),
+            [
+                {"tx": tx_id, "item": item, "change": change}
+                for item, change in changes.items()
+                if change != 0
+            ],
         )
-
-        if red_ml > 0:
-            add_ledger_entry(
-                connection,
-                "Red ML",
-                red_ml,
-                transaction_id,
-            )
-
-        if green_ml > 0:
-            add_ledger_entry(
-                connection,
-                "Green ML",
-                green_ml,
-                transaction_id,
-            )
-
-        if blue_ml > 0:
-            add_ledger_entry(
-                connection,
-                "Blue ML",
-                blue_ml,
-                transaction_id,
-            )
-
-    return None
 
 
 def create_barrel_plan(
@@ -230,137 +120,65 @@ def create_barrel_plan(
     current_red_ml: int,
     current_green_ml: int,
     current_blue_ml: int,
-    current_red_potions: int,
-    current_green_potions: int,
-    current_blue_potions: int,
+    current_dark_ml: int,
     wholesale_catalog: List[Barrel],
+    current_potions: dict = None,
 ) -> List[BarrelOrder]:
+    print(
+        f"gold: {gold}, max_barrel_capacity: {max_barrel_capacity}, "
+        f"potions: {current_potions}, wholesale_catalog: {wholesale_catalog}"
+    )
+    current_potions = current_potions or {}
 
-    GOLD_RESERVE = 0
-    MIN_POTIONS = 10
+    # randomly pick red, green, or blue
+    color = random.choice(["red", "green", "blue"])
+    color_index = ml_colors.index(color)
 
-    potion_counts = {
-        "red": current_red_potions,
-        "green": current_green_potions,
-        "blue": current_blue_potions,
-    }
+    # need fewer than 5 potions of that color
+    if current_potions.get(color, 0) >= 5:
+        return []
 
-    color_index = {
-        "red": 0,
-        "green": 1,
-        "blue": 2,
-    }
+    # small barrel of that color
+    small_barrel = next(
+        (
+            b
+            for b in wholesale_catalog
+            if "SMALL" in b.sku.upper() and b.potion_type[color_index] == 1
+        ),
+        None,
+    )
 
-    orders = []
+    # need to afford it
+    if small_barrel and small_barrel.price <= gold:
+        return [BarrelOrder(sku=small_barrel.sku, quantity=1)]
 
-    available_gold = gold - GOLD_RESERVE
-
-    for color, count in potion_counts.items():
-
-        if count >= MIN_POTIONS:
-            continue
-
-        possible_barrels = [
-            barrel
-            for barrel in wholesale_catalog
-            if barrel.potion_type[color_index[color]] == 1
-            and barrel.price <= available_gold
-        ]
-
-        if not possible_barrels:
-            continue
-
-        best_barrel = min(
-            possible_barrels,
-            key=lambda barrel:
-                barrel.price / barrel.ml_per_barrel,
-        )
-
-        orders.append(
-            BarrelOrder(
-                sku=best_barrel.sku,
-                quantity=1,
-            )
-        )
-
-        available_gold -= best_barrel.price
-
-    return orders
+    return []
 
 
-@router.post(
-    "/plan",
-    response_model=List[BarrelOrder],
-)
-def get_wholesale_purchase_plan(
-    wholesale_catalog: List[Barrel],
-):
+@router.post("/plan", response_model=List[BarrelOrder])
+def get_wholesale_purchase_plan(wholesale_catalog: List[Barrel]):
     """
-    Creates a barrel purchase plan based on the
-    current ledger inventory.
-
-    Gold and ML are read from the ledger.
-    global_inventory is not used.
+    Gets the plan for purchasing wholesale barrels. Read-only: no database writes.
     """
+    print(f"barrel catalog: {wholesale_catalog}")
 
-    with db.engine.begin() as connection:
-
-        gold = get_ledger_balance(
-            connection,
-            "Gold",
-        )
-        red_ml = get_ledger_balance(
-            connection,
-            "Red ML",
-        )
-
-        green_ml = get_ledger_balance(
-            connection,
-            "Green ML",
-        )
-
-        blue_ml = get_ledger_balance(
-            connection,
-            "Blue ML",
-        )
-        potions = connection.execute(
-            sqlalchemy.text(
-                """
-                SELECT
-                    sku,
-                    quantity
-                FROM potions
-                """
-            )
-        ).mappings().all()
-
-    potion_inventory = {
-        potion["sku"]: potion["quantity"]
-        for potion in potions
-    }
+    with db.engine.connect() as connection:
+        rows = connection.execute(
+            sqlalchemy.text("SELECT item, balance FROM inventory_balances")
+        ).all()
+    balances = {r.item: r.balance for r in rows}
 
     return create_barrel_plan(
-        gold=gold,
-        max_barrel_capacity=100000,
-
-        current_red_ml=red_ml,
-        current_green_ml=green_ml,
-        current_blue_ml=blue_ml,
-
-        current_red_potions=potion_inventory.get(
-            "RED_POTION_0",
-            0,
-        ),
-
-        current_green_potions=potion_inventory.get(
-            "GREEN_POTION_0",
-            0,
-        ),
-
-        current_blue_potions=potion_inventory.get(
-            "BLUE_POTION_0",
-            0,
-        ),
-
+        gold=balances.get("gold", 0),
+        max_barrel_capacity=10000,
+        current_red_ml=balances.get("red_ml", 0),
+        current_green_ml=balances.get("green_ml", 0),
+        current_blue_ml=balances.get("blue_ml", 0),
+        current_dark_ml=balances.get("dark_ml", 0),
         wholesale_catalog=wholesale_catalog,
+        current_potions={
+            "red": balances.get("potion:red", 0),
+            "green": balances.get("potion:green", 0),
+            "blue": balances.get("potion:blue", 0),
+        },
     )
