@@ -17,7 +17,6 @@ def reset():
     The potions table (your catalog of recipes) is kept.
     """
     with db.engine.begin() as connection:
-        # children before parents because of foreign keys
         for table in [
             "potion_sales",
             "cart_items",

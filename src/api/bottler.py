@@ -14,7 +14,6 @@ router = APIRouter(
 
 ml_colors = ["red", "green", "blue", "dark"]
 
-
 class PotionMixes(BaseModel):
     potion_type: List[int] = Field(
         ...,
@@ -126,7 +125,6 @@ def create_bottle_plan(
     room = maximum_potion_capacity - sum(p.quantity for p in current_potion_inventory)
     made = {}
 
-    # round-robin over every recipe in the potions table so none hogs the ml
     progress = True
     while room > 0 and progress:
         progress = False
@@ -169,7 +167,7 @@ def get_bottle_plan():
         green_ml=balances.get("green_ml", 0),
         blue_ml=balances.get("blue_ml", 0),
         dark_ml=balances.get("dark_ml", 0),
-        maximum_potion_capacity=50,
+        maximum_potion_capacity=50 * (1 + balances.get("potion_capacity", 0)),
         current_potion_inventory=stocked,
         recipes=[[p.red, p.green, p.blue, p.dark] for p in potions],
     )

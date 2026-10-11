@@ -74,8 +74,8 @@ def get_capacity_plan():
     """
 
     return CapacityPlan(
-        potion_capacity=2,
-        ml_capacity=2,
+        potion_capacity= 0,
+        ml_capacity=0,
     )
 
 
