@@ -134,17 +134,14 @@ def create_barrel_plan(
     if current_potions.get(color, 0) >= 5:
         return []
 
-    small_barrel = next(
-        (
-            b
-            for b in wholesale_catalog
-            if "SMALL" in b.sku.upper() and b.potion_type[color_index] == 1
-        ),
-        None,
-    )
+    candidates = [
+        b for b in wholesale_catalog
+        if b.potion_type[color_index] == 1 and 0 < b.price <= gold
+    ]
+    best_barrel = min(candidates, key=lambda b: b.price / b.ml_per_barrel, default=None)
 
-    if small_barrel and small_barrel.price <= gold:
-        return [BarrelOrder(sku=small_barrel.sku, quantity=1)]
+    if best_barrel:
+        return [BarrelOrder(sku=best_barrel.sku, quantity=1)]
 
     return []
 
