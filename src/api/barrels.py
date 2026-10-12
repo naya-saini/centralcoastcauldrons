@@ -138,7 +138,7 @@ def create_barrel_plan(
         b for b in wholesale_catalog
         if b.potion_type[color_index] == 1 and 0 < b.price <= gold
     ]
-    best_barrel = min(candidates, key=lambda b: b.price / b.ml_per_barrel, default=None)
+    best_barrel = min(candidates, key=lambda b: b.price / b.ml_per_barrel, default= None)
 
     if best_barrel:
         return [BarrelOrder(sku=best_barrel.sku, quantity=1)]
